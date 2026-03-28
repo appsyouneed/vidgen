@@ -37,8 +37,6 @@ from torchao.quantization import quantize_, Float8DynamicActivationFloat8WeightC
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
-subprocess.run(["pkill", "-9", "python3", "-e", f"-{os.getpid()}"], stderr=subprocess.DEVNULL)
-time.sleep(2)
 warnings.filterwarnings("ignore")
 
 # --- FRAME EXTRACTION JS & LOGIC ---

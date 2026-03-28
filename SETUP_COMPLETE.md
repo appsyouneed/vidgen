@@ -50,7 +50,7 @@ sudo journalctl -u vidgen -f
 
 ## Access
 
-Once running, access at: **http://194.93.48.222:7860**
+Once running, access at: **http://194.93.48.12:7860**
 
 ## Notes
 
