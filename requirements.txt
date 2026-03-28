@@ -14,3 +14,10 @@ tqdm
 numpy
 torchvision
 gradio
+opencv-python
+torch
+huggingface_hub
+Pillow
+gradio
+diffusers
+typing-extensions
