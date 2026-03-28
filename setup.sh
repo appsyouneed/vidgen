@@ -10,8 +10,8 @@ apt-get install -y ffmpeg
 
 # Install Python dependencies
 echo "Installing Python dependencies..."
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
-pip install -r requirements.txt
+pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+pip3 install -r requirements.txt
 
 echo "=== Setup Complete ==="
 echo "Models will be cached in: ~/.cache/huggingface/"
