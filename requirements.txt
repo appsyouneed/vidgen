@@ -10,7 +10,7 @@ imageio
 imageio-ffmpeg
 opencv-python
 torchao==0.11.0
-
+tqdm
 numpy
 torchvision
 gradio
