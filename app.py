@@ -322,11 +322,8 @@ for i, lora in enumerate(LORA_MODELS):
 #     print("No hub cache found.")
 
 quantize_(pipe.text_encoder, Int8WeightOnlyConfig())
-torch._dynamo.reset()
 quantize_(pipe.transformer, Float8DynamicActivationFloat8WeightConfig())
-torch._dynamo.reset()
 quantize_(pipe.transformer_2, Float8DynamicActivationFloat8WeightConfig())
-torch._dynamo.reset()
 
 pipe.vae.enable_slicing()
 pipe.vae.enable_tiling()
