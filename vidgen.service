@@ -1,0 +1,18 @@
+[Unit]
+Description=Vidgen Video Generation Application
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/vidgen
+Environment="PYTHONUNBUFFERED=1"
+Environment="HF_HOME=/root/.cache/huggingface"
+ExecStart=/usr/bin/python3 /root/vidgen/app.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

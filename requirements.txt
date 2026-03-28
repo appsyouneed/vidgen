@@ -1,0 +1,16 @@
+git+https://github.com/linoytsaban/diffusers.git@wan22-loras
+
+transformers<5
+accelerate
+safetensors
+sentencepiece
+peft
+ftfy
+imageio
+imageio-ffmpeg
+opencv-python
+torchao==0.11.0
+
+numpy
+torchvision
+gradio
