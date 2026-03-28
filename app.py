@@ -107,7 +107,7 @@ if not os.path.exists("RIFEv4.26_0921.zip"):
     ], check=True)
     subprocess.run(["unzip", "-o", "RIFEv4.26_0921.zip"], check=True)
 
-# sys.path.append(os.getcwd())
+sys.path.append(os.path.join(os.getcwd(), "train_log"))
 
 from train_log.RIFE_HDv3 import Model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
