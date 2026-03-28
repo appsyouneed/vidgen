@@ -615,10 +615,10 @@ with gr.Blocks(delete_cache=(3600, 10800)) as demo:
             with gr.Accordion("Advanced Settings", open=False):
                 last_image_component = gr.Image(type="pil", label="Last Image (Optional)", sources=["upload", "clipboard"])
                 negative_prompt_input = gr.Textbox(label="Negative Prompt", value=default_negative_prompt, info="Used if any Guidance Scale > 1.", lines=3)
-                quality_slider = gr.Slider(minimum=1, maximum=10, step=1, value=6, label="Video Quality", info="If set to 10, the generated video may be too large and won't play in the Gradio preview.")
+                quality_slider = gr.Slider(minimum=1, maximum=10, step=1, value=7, label="Video Quality", info="If set to 10, the generated video may be too large and won't play in the Gradio preview.")
                 seed_input = gr.Slider(label="Seed", minimum=0, maximum=MAX_SEED, step=1, value=42, interactive=True)
                 randomize_seed_checkbox = gr.Checkbox(label="Randomize seed", value=True, interactive=True)
-                steps_slider = gr.Slider(minimum=1, maximum=30, step=1, value=6, label="Inference Steps")
+                steps_slider = gr.Slider(minimum=1, maximum=30, step=1, value=4, label="Inference Steps")
                 guidance_scale_input = gr.Slider(minimum=0.0, maximum=10.0, step=0.5, value=1, label="Guidance Scale - high noise stage", info="Values above 1 increase GPU usage and may take longer to process.")
                 guidance_scale_2_input = gr.Slider(minimum=0.0, maximum=10.0, step=0.5, value=1, label="Guidance Scale 2 - low noise stage")
                 scheduler_dropdown = gr.Dropdown(
