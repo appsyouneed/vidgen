@@ -5,13 +5,12 @@ echo "=== Wan 2.2 14B VPS Setup ==="
 
 # Install system dependencies
 echo "Installing system dependencies..."
-apt-get update
-apt-get install -y ffmpeg
+apt-get update && apt-get install -y python3-pip ffmpeg
 
 # Install Python dependencies
 echo "Installing Python dependencies..."
-pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu124
-pip3 install -r requirements.txt
+python3 -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+python3 -m pip install -r requirements.txt
 
 echo "=== Setup Complete ==="
 echo "Models will be cached in: ~/.cache/huggingface/"
