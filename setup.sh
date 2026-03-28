@@ -5,7 +5,7 @@ echo "=== Wan 2.2 14B VPS Setup ==="
 
 # Install system dependencies
 echo "Installing system dependencies..."
-apt-get update && apt-get install -y python3-pip ffmpeg
+apt-get update && apt-get install -y python3-pip ffmpeg wget unzip
 
 # Install Python dependencies
 echo "Installing Python dependencies..."
