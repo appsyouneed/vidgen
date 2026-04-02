@@ -3,6 +3,13 @@ set -e
 
 echo "=== Wan 2.2 14B VPS Setup ==="
 
+echo "Creating temp directory..."
+mkdir -p /root/vidgen/tmp
+chmod 1777 /root/vidgen/tmp
+
+echo "Creating cache directory..."
+mkdir -p /root/.cache/huggingface
+
 echo "Installing system dependencies..."
 apt-get update && apt-get install -y python3-pip python3-venv ffmpeg wget unzip
 

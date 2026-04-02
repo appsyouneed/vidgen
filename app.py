@@ -15,6 +15,11 @@ import cv2
 import numpy as np
 import torch
 import torch._dynamo
+torch._dynamo.config.suppress_errors = True
+torch.set_float32_matmul_precision('high')
+torch.backends.cudnn.benchmark = True
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
 from huggingface_hub import list_models
 from torch.nn import functional as F
 from PIL import Image
@@ -234,6 +239,7 @@ MODEL_ID = os.getenv("REPO_ID") or random.choice(
     list(list_models(author=ORG_NAME, filter='diffusers:WanImageToVideoPipeline'))
 ).modelId
 CACHE_DIR = os.path.expanduser("~/.cache/huggingface/")
+os.makedirs(CACHE_DIR, exist_ok=True)
 
 LORA_MODELS = [
     # {
@@ -278,6 +284,7 @@ SCHEDULER_MAP = {
 pipe = WanImageToVideoPipeline.from_pretrained(
     MODEL_ID,
     torch_dtype=torch.bfloat16,
+    cache_dir=CACHE_DIR,
 ).to('cuda')
 original_scheduler = copy.deepcopy(pipe.scheduler)
 
@@ -319,12 +326,15 @@ for i, lora in enumerate(LORA_MODELS):
 # else:
 #     print("No hub cache found.")
 
-quantize_(pipe.text_encoder, Int8WeightOnlyConfig())
-quantize_(pipe.transformer, Float8DynamicActivationFloat8WeightConfig())
-quantize_(pipe.transformer_2, Float8DynamicActivationFloat8WeightConfig())
+# Removed quantization and VAE optimizations for high VRAM setup (95GB)
+# quantize_(pipe.text_encoder, Int8WeightOnlyConfig())
+# quantize_(pipe.transformer, Float8DynamicActivationFloat8WeightConfig())
+# quantize_(pipe.transformer_2, Float8DynamicActivationFloat8WeightConfig())
+# pipe.vae.enable_slicing()
+# pipe.vae.enable_tiling()
 
-pipe.vae.enable_slicing()
-pipe.vae.enable_tiling()
+pipe.transformer = torch.compile(pipe.transformer, mode="max-autotune", fullgraph=True)
+pipe.transformer_2 = torch.compile(pipe.transformer_2, mode="max-autotune", fullgraph=True)
 
 default_prompt_i2v = "make this image come alive, cinematic motion, smooth animation"
 default_negative_prompt = "色调艳丽, 过曝, 静态, 细节模糊不清, 字幕, 风格, 作品, 画作, 画面, 静止, 整体发灰, 最差质量, 低质量, JPEG压缩残留, 丑陋的, 残缺的, 多余的手指, 画得不好的手部, 画得不好的脸部, 畸形的, 毁容的, 形态畸形的肢体, 手指融合, 静止不动的画面, 杂乱的背景, 三条腿, 背景人很多, 倒着走"
