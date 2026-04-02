@@ -146,7 +146,7 @@ def get_assigned_pipeline():
     global _pipeline_counter
     if not hasattr(_thread_local, 'pipe_id'):
         with _pipeline_lock:
-            _thread_local.pipe_id = _pipeline_counter % 3
+            _thread_local.pipe_id = 0
             _pipeline_counter += 1
             print(f"Thread {threading.current_thread().name} assigned to pipeline {_thread_local.pipe_id}")
     return _thread_local.pipe_id
@@ -322,27 +322,16 @@ pipe = WanImageToVideoPipeline.from_pretrained(
     local_files_only=False,
 )
 
-# Create 3 pipeline instances for single GPU
+# Create 1 pipeline instance for single GPU
 pipes = []
 original_schedulers = []
 
-print("Creating 3 pipeline instances for concurrent processing")
+print("Creating 1 pipeline instance")
 
-for i in range(3):
-    if i == 0:
-        pipe.to('cuda')
-        pipes.append(pipe)
-    else:
-        pipe_instance = WanImageToVideoPipeline.from_pretrained(
-            MODEL_ID,
-            torch_dtype=torch.bfloat16,
-            cache_dir=CACHE_DIR,
-            local_files_only=True,
-        ).to('cuda')
-        pipes.append(pipe_instance)
-    
-    original_schedulers.append(copy.deepcopy(pipes[i].scheduler))
-    _scheduler_locks.append(threading.Lock())
+pipe.to('cuda')
+pipes.append(pipe)
+original_schedulers.append(copy.deepcopy(pipe.scheduler))
+_scheduler_locks.append(threading.Lock())
 
 print(f"Total pipeline instances: {len(pipes)}")
 
@@ -374,7 +363,7 @@ for i, lora in enumerate(LORA_MODELS):
         
             current_pipe.unload_lora_weights()
 
-        print(f"Applied LoRA to all 3 pipelines: {lora['high_tr']}, hs={lora['high_scale']}/ls={lora['low_scale']}, {i+1}/{len(LORA_MODELS)}") 
+        print(f"Applied LoRA to pipeline: {lora['high_tr']}, hs={lora['high_scale']}/ls={lora['low_scale']}, {i+1}/{len(LORA_MODELS)}") 
     except Exception as e:
         print("Error:", str(e))
         print("Failed LoRA:", name_high_tr)
@@ -763,7 +752,7 @@ with gr.Blocks(delete_cache=(3600, 10800)) as demo:
     )
 
 if __name__ == "__main__":
-    demo.queue(max_size=30, default_concurrency_limit=3).launch(
+    demo.queue(max_size=30, default_concurrency_limit=1).launch(
         server_name="0.0.0.0",
         server_port=7860,
         css=CSS,
