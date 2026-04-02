@@ -26,6 +26,8 @@ torch.set_float32_matmul_precision('high')
 torch.backends.cudnn.benchmark = True
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
+torch.set_num_threads(8)
+torch.set_num_interop_threads(4)
 from huggingface_hub import list_models
 from torch.nn import functional as F
 from PIL import Image
@@ -52,6 +54,8 @@ os.environ["HF_HUB_DISABLE_EXPERIMENTAL_WARNING"] = "1"
 os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
 os.environ["TRANSFORMERS_CACHE"] = "/root/.cache/huggingface"
 os.environ["HF_HOME"] = "/root/.cache/huggingface"
+os.environ["CUDA_LAUNCH_BLOCKING"] = "0"
+os.environ["OMP_NUM_THREADS"] = "8"
 
 warnings.filterwarnings("ignore")
 
@@ -129,6 +133,9 @@ sys.path.append(os.path.join(os.getcwd(), "train_log"))
 
 from train_log.RIFE_HDv3 import Model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+num_gpus = torch.cuda.device_count()
+print(f"Detected {num_gpus} GPU(s)")
+
 rife_model = Model()
 rife_model.load_model("train_log", -1)
 rife_model.eval()
@@ -298,7 +305,15 @@ pipe = WanImageToVideoPipeline.from_pretrained(
     cache_dir=CACHE_DIR,
     resume_download=True,
     local_files_only=False,
-).to('cuda')
+)
+
+if num_gpus > 1:
+    print(f"Enabling multi-GPU mode across {num_gpus} GPUs")
+    pipe.enable_model_cpu_offload()
+    pipe.to('cuda:0')
+else:
+    pipe.to('cuda')
+
 original_scheduler = copy.deepcopy(pipe.scheduler)
 
 for i, lora in enumerate(LORA_MODELS):
@@ -345,9 +360,6 @@ for i, lora in enumerate(LORA_MODELS):
 # quantize_(pipe.transformer_2, Float8DynamicActivationFloat8WeightConfig())
 # pipe.vae.enable_slicing()
 # pipe.vae.enable_tiling()
-
-pipe.transformer = torch.compile(pipe.transformer, mode="max-autotune", fullgraph=True)
-pipe.transformer_2 = torch.compile(pipe.transformer_2, mode="max-autotune", fullgraph=True)
 
 default_prompt_i2v = "make this image come alive, cinematic motion, smooth animation"
 default_negative_prompt = "色调艳丽, 过曝, 静态, 细节模糊不清, 字幕, 风格, 作品, 画作, 画面, 静止, 整体发灰, 最差质量, 低质量, JPEG压缩残留, 丑陋的, 残缺的, 多余的手指, 画得不好的手部, 画得不好的脸部, 畸形的, 毁容的, 形态畸形的肢体, 手指融合, 静止不动的画面, 杂乱的背景, 三条腿, 背景人很多, 倒着走"
@@ -464,6 +476,11 @@ def run_inference(
     task_name = str(uuid.uuid4())[:8]
     print(f"Generating {num_frames} frames, task: {task_name}, {duration_seconds}, {resized_image.size}")
     start = time.time()
+    
+    # Use appropriate device based on GPU count
+    target_device = 'cuda:0' if num_gpus > 1 else 'cuda'
+    generator = torch.Generator(device=target_device).manual_seed(current_seed)
+    
     result = pipe(
         image=resized_image,
         last_image=processed_last_image,
@@ -475,7 +492,7 @@ def run_inference(
         guidance_scale=float(guidance_scale),
         guidance_scale_2=float(guidance_scale_2),
         num_inference_steps=int(steps),
-        generator=torch.Generator(device="cuda").manual_seed(current_seed),
+        generator=generator,
         output_type="np" 
     )
     print("gen time passed:", time.time() - start)
@@ -703,9 +720,10 @@ with gr.Blocks(delete_cache=(3600, 10800)) as demo:
     )
 
 if __name__ == "__main__":
-    demo.queue().launch(
+    demo.queue(max_size=30, default_concurrency_limit=7).launch(
         server_name="0.0.0.0",
         server_port=7860,
         css=CSS,
         show_error=True,
+        max_threads=20,
     )
