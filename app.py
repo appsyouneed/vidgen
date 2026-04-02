@@ -47,6 +47,11 @@ from torchao.quantization import quantize_, Float8DynamicActivationFloat8WeightC
 
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["HF_HUB_DISABLE_EXPERIMENTAL_WARNING"] = "1"
+os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
+os.environ["TRANSFORMERS_CACHE"] = "/root/.cache/huggingface"
+os.environ["HF_HOME"] = "/root/.cache/huggingface"
 
 warnings.filterwarnings("ignore")
 
@@ -291,6 +296,8 @@ pipe = WanImageToVideoPipeline.from_pretrained(
     MODEL_ID,
     torch_dtype=torch.bfloat16,
     cache_dir=CACHE_DIR,
+    resume_download=True,
+    local_files_only=False,
 ).to('cuda')
 original_scheduler = copy.deepcopy(pipe.scheduler)
 
