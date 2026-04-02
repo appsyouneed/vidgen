@@ -9,6 +9,7 @@ import warnings
 import time
 import gc
 import uuid
+import threading
 from tqdm import tqdm
 
 # Set temp directory before torch imports
@@ -135,6 +136,23 @@ from train_log.RIFE_HDv3 import Model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 num_gpus = torch.cuda.device_count()
 print(f"Detected {num_gpus} GPU(s)")
+
+# Thread-local storage for pipeline assignment
+_thread_local = threading.local()
+_pipeline_lock = threading.Lock()
+_pipeline_counter = 0
+_scheduler_locks = []
+
+def get_assigned_pipeline():
+    """Assign pipeline to thread in round-robin fashion"""
+    global _pipeline_counter
+    if not hasattr(_thread_local, 'pipe_id'):
+        with _pipeline_lock:
+            _thread_local.pipe_id = _pipeline_counter % num_pipes
+            _pipeline_counter += 1
+            gpu_id = _thread_local.pipe_id % num_gpus if num_gpus > 1 else 0
+            print(f"Thread {threading.current_thread().name} assigned to pipeline {_thread_local.pipe_id} on GPU {gpu_id}")
+    return _thread_local.pipe_id
 
 rife_model = Model()
 rife_model.load_model("train_log", -1)
@@ -307,46 +325,86 @@ pipe = WanImageToVideoPipeline.from_pretrained(
     local_files_only=False,
 )
 
-if num_gpus > 1:
-    print(f"Enabling multi-GPU mode across {num_gpus} GPUs")
-    pipe.enable_model_cpu_offload()
-    pipe.to('cuda:0')
-else:
-    pipe.to('cuda')
+# Create pipeline instances for each GPU
+pipes = []
+original_schedulers = []
+pipelines_per_gpu = 2  # 2 pipelines per GPU for concurrent processing
 
-original_scheduler = copy.deepcopy(pipe.scheduler)
+pipe.to('cuda:0')
+pipes.append(pipe)
+original_schedulers.append(copy.deepcopy(pipe.scheduler))
+_scheduler_locks.append(threading.Lock())
+
+if num_gpus > 1:
+    total_pipes = num_gpus * pipelines_per_gpu
+    print(f"Creating {total_pipes} pipeline instances ({pipelines_per_gpu} per GPU) for multi-GPU")
+    
+    # Clone pipelines by reusing loaded components
+    for i in range(1, total_pipes):
+        gpu_id = i % num_gpus
+        pipe_clone = WanImageToVideoPipeline(
+            vae=pipes[0].vae,
+            text_encoder=pipes[0].text_encoder,
+            tokenizer=pipes[0].tokenizer,
+            transformer=pipes[0].transformer,
+            transformer_2=pipes[0].transformer_2,
+            scheduler=copy.deepcopy(pipes[0].scheduler),
+        ).to(f'cuda:{gpu_id}')
+        pipes.append(pipe_clone)
+        original_schedulers.append(copy.deepcopy(pipe_clone.scheduler))
+        _scheduler_locks.append(threading.Lock())
+else:
+    # Single GPU: clone pipelines reusing components
+    for i in range(1, 3):
+        pipe_clone = WanImageToVideoPipeline(
+            vae=pipes[0].vae,
+            text_encoder=pipes[0].text_encoder,
+            tokenizer=pipes[0].tokenizer,
+            transformer=pipes[0].transformer,
+            transformer_2=pipes[0].transformer_2,
+            scheduler=copy.deepcopy(pipes[0].scheduler),
+        ).to('cuda')
+        pipes.append(pipe_clone)
+        original_schedulers.append(copy.deepcopy(pipe_clone.scheduler))
+        _scheduler_locks.append(threading.Lock())
+
+num_pipes = len(pipes)
+print(f"Total pipeline instances: {num_pipes}")
 
 for i, lora in enumerate(LORA_MODELS):
     name_high_tr = lora["high_tr"].split(".")[0].split("/")[-1] + "Hh"
     name_low_tr = lora["low_tr"].split(".")[0].split("/")[-1] + "Ll"
     
-    try: 
-        pipe.load_lora_weights(
-            lora["repo_id"],
-            weight_name=lora["high_tr"],
-            adapter_name=name_high_tr
-        )
-    
-        kwargs_lora = {"load_into_transformer_2": True}
-        pipe.load_lora_weights(
-            lora["repo_id"],
-            weight_name=lora["low_tr"],
-            adapter_name=name_low_tr,
-            **kwargs_lora
-        )
-    
-        pipe.set_adapters([name_high_tr, name_low_tr], adapter_weights=[1.0, 1.0])
-    
-        pipe.fuse_lora(adapter_names=[name_high_tr], lora_scale=lora["high_scale"], components=["transformer"])
-        pipe.fuse_lora(adapter_names=[name_low_tr], lora_scale=lora["low_scale"], components=["transformer_2"])
-    
-        pipe.unload_lora_weights()
+    try:
+        # Apply LoRA to all pipeline instances
+        for pipe_idx, current_pipe in enumerate(pipes):
+            current_pipe.load_lora_weights(
+                lora["repo_id"],
+                weight_name=lora["high_tr"],
+                adapter_name=name_high_tr
+            )
+        
+            kwargs_lora = {"load_into_transformer_2": True}
+            current_pipe.load_lora_weights(
+                lora["repo_id"],
+                weight_name=lora["low_tr"],
+                adapter_name=name_low_tr,
+                **kwargs_lora
+            )
+        
+            current_pipe.set_adapters([name_high_tr, name_low_tr], adapter_weights=[1.0, 1.0])
+        
+            current_pipe.fuse_lora(adapter_names=[name_high_tr], lora_scale=lora["high_scale"], components=["transformer"])
+            current_pipe.fuse_lora(adapter_names=[name_low_tr], lora_scale=lora["low_scale"], components=["transformer_2"])
+        
+            current_pipe.unload_lora_weights()
 
-        print(f"Applied: {lora['high_tr']}, hs={lora['high_scale']}/ls={lora['low_scale']}, {i+1}/{len(LORA_MODELS)}") 
+        print(f"Applied LoRA to all {num_pipes} pipelines: {lora['high_tr']}, hs={lora['high_scale']}/ls={lora['low_scale']}, {i+1}/{len(LORA_MODELS)}") 
     except Exception as e:
         print("Error:", str(e))
         print("Failed LoRA:", name_high_tr)
-        pipe.unload_lora_weights()
+        for current_pipe in pipes:
+            current_pipe.unload_lora_weights()
 
 # if os.path.exists(CACHE_DIR):
 #     shutil.rmtree(CACHE_DIR)
@@ -462,26 +520,37 @@ def run_inference(
     duration_seconds,
     progress=gr.Progress(track_tqdm=True),
 ):
+    # Get assigned pipeline for this thread
+    pipe_id = get_assigned_pipeline()
+    current_pipe = pipes[pipe_id]
+    gpu_id = pipe_id % num_gpus if num_gpus > 1 else 0
+    target_device = f'cuda:{gpu_id}'
+    
+    # Only change scheduler if needed
     scheduler_class = SCHEDULER_MAP.get(scheduler_name)
-    if scheduler_class.__name__ != pipe.scheduler.config._class_name or flow_shift != pipe.scheduler.config.get("flow_shift", "shift"):
-        config = copy.deepcopy(original_scheduler.config)
+    needs_scheduler_change = (
+        scheduler_class.__name__ != current_pipe.scheduler.config._class_name or 
+        flow_shift != current_pipe.scheduler.config.get("flow_shift", 6.0)
+    )
+    
+    if needs_scheduler_change:
+        config = copy.deepcopy(original_schedulers[pipe_id].config)
         if scheduler_class == FlowMatchEulerDiscreteScheduler:
             config['shift'] = flow_shift
         else:
             config['flow_shift'] = flow_shift
-        pipe.scheduler = scheduler_class.from_config(config)
+        new_scheduler = scheduler_class.from_config(config)
+        current_pipe.scheduler = new_scheduler
 
     clear_vram()
 
     task_name = str(uuid.uuid4())[:8]
-    print(f"Generating {num_frames} frames, task: {task_name}, {duration_seconds}, {resized_image.size}")
+    print(f"Generating {num_frames} frames on {target_device}, task: {task_name}, {duration_seconds}, {resized_image.size}")
     start = time.time()
     
-    # Use appropriate device based on GPU count
-    target_device = 'cuda:0' if num_gpus > 1 else 'cuda'
     generator = torch.Generator(device=target_device).manual_seed(current_seed)
     
-    result = pipe(
+    result = current_pipe(
         image=resized_image,
         last_image=processed_last_image,
         prompt=prompt,
@@ -498,7 +567,7 @@ def run_inference(
     print("gen time passed:", time.time() - start)
     
     raw_frames_np = result.frames[0]  # Returns (T, H, W, C) float32
-    pipe.scheduler = original_scheduler
+    current_pipe.scheduler = original_schedulers[pipe_id]
 
     frame_factor = frame_multiplier // FIXED_FPS
     if frame_factor > 1:
@@ -700,7 +769,7 @@ with gr.Blocks(delete_cache=(3600, 10800)) as demo:
     generate_button.click(
         fn=generate_video, 
         inputs=ui_inputs, 
-        outputs=[video_output, file_output, seed_input]
+        outputs=[video_output, file_output, seed_input],
     )
     
     # --- Frame Grabbing Events ---
@@ -720,7 +789,8 @@ with gr.Blocks(delete_cache=(3600, 10800)) as demo:
     )
 
 if __name__ == "__main__":
-    demo.queue(max_size=30, default_concurrency_limit=7).launch(
+    concurrency = 4 if num_gpus >= 2 else 3
+    demo.queue(max_size=30, default_concurrency_limit=concurrency).launch(
         server_name="0.0.0.0",
         server_port=7860,
         css=CSS,
