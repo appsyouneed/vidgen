@@ -328,27 +328,20 @@ original_schedulers = []
 
 print("Creating 3 pipeline instances for concurrent processing")
 
-pipe.to('cuda')
-pipes.append(pipe)
-original_schedulers.append(copy.deepcopy(pipe.scheduler))
-_scheduler_locks.append(threading.Lock())
-
-# Clone 2 more pipelines reusing components
-for i in range(1, 3):
-    pipe_clone = WanImageToVideoPipeline(
-        vae=pipe.vae,
-        text_encoder=pipe.text_encoder,
-        tokenizer=pipe.tokenizer,
-        transformer=pipe.transformer,
-        transformer_2=pipe.transformer_2,
-        scheduler=copy.deepcopy(pipe.scheduler),
-    )
-    # Copy boundary ratio
-    if hasattr(pipe, '_boundary_ratio'):
-        pipe_clone._boundary_ratio = pipe._boundary_ratio
-    pipe_clone.to('cuda')
-    pipes.append(pipe_clone)
-    original_schedulers.append(copy.deepcopy(pipe_clone.scheduler))
+for i in range(3):
+    if i == 0:
+        pipe.to('cuda')
+        pipes.append(pipe)
+    else:
+        pipe_instance = WanImageToVideoPipeline.from_pretrained(
+            MODEL_ID,
+            torch_dtype=torch.bfloat16,
+            cache_dir=CACHE_DIR,
+            local_files_only=True,
+        ).to('cuda')
+        pipes.append(pipe_instance)
+    
+    original_schedulers.append(copy.deepcopy(pipes[i].scheduler))
     _scheduler_locks.append(threading.Lock())
 
 print(f"Total pipeline instances: {len(pipes)}")
