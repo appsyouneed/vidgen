@@ -11,6 +11,12 @@ import gc
 import uuid
 from tqdm import tqdm
 
+# Set temp directory before torch imports
+os.makedirs("/root/vidgen/tmp", exist_ok=True)
+os.environ["TMPDIR"] = "/root/vidgen/tmp"
+os.environ["TEMP"] = "/root/vidgen/tmp"
+os.environ["TMP"] = "/root/vidgen/tmp"
+
 import cv2
 import numpy as np
 import torch
