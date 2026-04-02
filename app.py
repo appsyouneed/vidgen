@@ -336,13 +336,19 @@ _scheduler_locks.append(threading.Lock())
 # Clone 2 more pipelines reusing components
 for i in range(1, 3):
     pipe_clone = WanImageToVideoPipeline(
-        vae=pipes[0].vae,
-        text_encoder=pipes[0].text_encoder,
-        tokenizer=pipes[0].tokenizer,
-        transformer=pipes[0].transformer,
-        transformer_2=pipes[0].transformer_2,
-        scheduler=copy.deepcopy(pipes[0].scheduler),
-    ).to('cuda')
+        vae=pipe.vae,
+        text_encoder=pipe.text_encoder,
+        tokenizer=pipe.tokenizer,
+        transformer=pipe.transformer,
+        transformer_2=pipe.transformer_2,
+        scheduler=copy.deepcopy(pipe.scheduler),
+    )
+    # Copy boundary ratio and other internal configs
+    if hasattr(pipe, '_boundary_ratio'):
+        pipe_clone._boundary_ratio = pipe._boundary_ratio
+    if hasattr(pipe, 'config'):
+        pipe_clone.config = pipe.config
+    pipe_clone.to('cuda')
     pipes.append(pipe_clone)
     original_schedulers.append(copy.deepcopy(pipe_clone.scheduler))
     _scheduler_locks.append(threading.Lock())
