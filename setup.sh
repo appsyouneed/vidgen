@@ -4,15 +4,19 @@ set -e
 echo "=== Wan 2.2 14B VPS Setup ==="
 
 echo "Installing system dependencies..."
-apt-get update && apt-get install -y python3-pip ffmpeg wget unzip
+apt-get update && apt-get install -y python3-pip python3-venv ffmpeg wget unzip
 
-if ! python3 -c "import torch" 2>/dev/null; then
-    echo "Installing Python dependencies..."
-    python3 -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124 --break-system-packages
-    python3 -m pip install -r requirements.txt --break-system-packages --ignore-installed
-else
-    echo "Python dependencies already installed, skipping..."
+if [ ! -d "venv" ]; then
+    echo "Creating virtual environment..."
+    python3 -m venv venv
 fi
+
+echo "Activating virtual environment..."
+source venv/bin/activate
+
+echo "Installing Python dependencies..."
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+pip install -r requirements.txt
 
 if [ ! -f "RIFEv4.26_0921.zip" ]; then
     echo "Downloading RIFE model..."
@@ -33,17 +37,15 @@ fi
 
 echo "=== Setup Complete ==="
 echo ""
-echo "Killing any existing Python processes..."
-pkill -9 python3 2>/dev/null || true
-sleep 2
+echo "Enabling vidgen service..."
+systemctl daemon-reload
+systemctl enable vidgen
+systemctl start vidgen
 
-echo "Starting application..."
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-python3 app.py
-echo "Models will be cached in: ~/.cache/huggingface/"
-echo "RIFE model will be downloaded to: ./RIFEv4.26_0921.zip"
 echo ""
-echo "To run the application:"
-echo "  python app.py"
+echo "Service commands:"
+echo "  ./start.sh  - Start vidgen"
+echo "  ./stop.sh   - Stop vidgen"
+echo "  systemctl status vidgen - Check status"
 echo ""
 echo "The app will be accessible at: http://0.0.0.0:7860"
