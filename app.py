@@ -343,11 +343,9 @@ for i in range(1, 3):
         transformer_2=pipe.transformer_2,
         scheduler=copy.deepcopy(pipe.scheduler),
     )
-    # Copy boundary ratio and other internal configs
+    # Copy boundary ratio
     if hasattr(pipe, '_boundary_ratio'):
         pipe_clone._boundary_ratio = pipe._boundary_ratio
-    if hasattr(pipe, 'config'):
-        pipe_clone.config = pipe.config
     pipe_clone.to('cuda')
     pipes.append(pipe_clone)
     original_schedulers.append(copy.deepcopy(pipe_clone.scheduler))
