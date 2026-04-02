@@ -133,9 +133,7 @@ if not os.path.exists("RIFEv4.26_0921.zip"):
 sys.path.append(os.path.join(os.getcwd(), "train_log"))
 
 from train_log.RIFE_HDv3 import Model
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-num_gpus = torch.cuda.device_count()
-print(f"Detected {num_gpus} GPU(s)")
+device = torch.device("cuda")
 
 # Thread-local storage for pipeline assignment
 _thread_local = threading.local()
@@ -148,10 +146,9 @@ def get_assigned_pipeline():
     global _pipeline_counter
     if not hasattr(_thread_local, 'pipe_id'):
         with _pipeline_lock:
-            _thread_local.pipe_id = _pipeline_counter % num_pipes
+            _thread_local.pipe_id = _pipeline_counter % 3
             _pipeline_counter += 1
-            gpu_id = _thread_local.pipe_id % num_gpus if num_gpus > 1 else 0
-            print(f"Thread {threading.current_thread().name} assigned to pipeline {_thread_local.pipe_id} on GPU {gpu_id}")
+            print(f"Thread {threading.current_thread().name} assigned to pipeline {_thread_local.pipe_id}")
     return _thread_local.pipe_id
 
 rife_model = Model()
@@ -325,51 +322,32 @@ pipe = WanImageToVideoPipeline.from_pretrained(
     local_files_only=False,
 )
 
-# Create pipeline instances for each GPU
+# Create 3 pipeline instances for single GPU
 pipes = []
 original_schedulers = []
-pipelines_per_gpu = 2  # 2 pipelines per GPU for concurrent processing
 
-pipe.to('cuda:0')
+print("Creating 3 pipeline instances for concurrent processing")
+
+pipe.to('cuda')
 pipes.append(pipe)
 original_schedulers.append(copy.deepcopy(pipe.scheduler))
 _scheduler_locks.append(threading.Lock())
 
-if num_gpus > 1:
-    total_pipes = num_gpus * pipelines_per_gpu
-    print(f"Creating {total_pipes} pipeline instances ({pipelines_per_gpu} per GPU) for multi-GPU")
-    
-    # Clone pipelines by reusing loaded components
-    for i in range(1, total_pipes):
-        gpu_id = i % num_gpus
-        pipe_clone = WanImageToVideoPipeline(
-            vae=pipes[0].vae,
-            text_encoder=pipes[0].text_encoder,
-            tokenizer=pipes[0].tokenizer,
-            transformer=pipes[0].transformer,
-            transformer_2=pipes[0].transformer_2,
-            scheduler=copy.deepcopy(pipes[0].scheduler),
-        ).to(f'cuda:{gpu_id}')
-        pipes.append(pipe_clone)
-        original_schedulers.append(copy.deepcopy(pipe_clone.scheduler))
-        _scheduler_locks.append(threading.Lock())
-else:
-    # Single GPU: clone pipelines reusing components
-    for i in range(1, 3):
-        pipe_clone = WanImageToVideoPipeline(
-            vae=pipes[0].vae,
-            text_encoder=pipes[0].text_encoder,
-            tokenizer=pipes[0].tokenizer,
-            transformer=pipes[0].transformer,
-            transformer_2=pipes[0].transformer_2,
-            scheduler=copy.deepcopy(pipes[0].scheduler),
-        ).to('cuda')
-        pipes.append(pipe_clone)
-        original_schedulers.append(copy.deepcopy(pipe_clone.scheduler))
-        _scheduler_locks.append(threading.Lock())
+# Clone 2 more pipelines reusing components
+for i in range(1, 3):
+    pipe_clone = WanImageToVideoPipeline(
+        vae=pipes[0].vae,
+        text_encoder=pipes[0].text_encoder,
+        tokenizer=pipes[0].tokenizer,
+        transformer=pipes[0].transformer,
+        transformer_2=pipes[0].transformer_2,
+        scheduler=copy.deepcopy(pipes[0].scheduler),
+    ).to('cuda')
+    pipes.append(pipe_clone)
+    original_schedulers.append(copy.deepcopy(pipe_clone.scheduler))
+    _scheduler_locks.append(threading.Lock())
 
-num_pipes = len(pipes)
-print(f"Total pipeline instances: {num_pipes}")
+print(f"Total pipeline instances: {len(pipes)}")
 
 for i, lora in enumerate(LORA_MODELS):
     name_high_tr = lora["high_tr"].split(".")[0].split("/")[-1] + "Hh"
@@ -399,7 +377,7 @@ for i, lora in enumerate(LORA_MODELS):
         
             current_pipe.unload_lora_weights()
 
-        print(f"Applied LoRA to all {num_pipes} pipelines: {lora['high_tr']}, hs={lora['high_scale']}/ls={lora['low_scale']}, {i+1}/{len(LORA_MODELS)}") 
+        print(f"Applied LoRA to all 3 pipelines: {lora['high_tr']}, hs={lora['high_scale']}/ls={lora['low_scale']}, {i+1}/{len(LORA_MODELS)}") 
     except Exception as e:
         print("Error:", str(e))
         print("Failed LoRA:", name_high_tr)
@@ -523,8 +501,7 @@ def run_inference(
     # Get assigned pipeline for this thread
     pipe_id = get_assigned_pipeline()
     current_pipe = pipes[pipe_id]
-    gpu_id = pipe_id % num_gpus if num_gpus > 1 else 0
-    target_device = f'cuda:{gpu_id}'
+    target_device = 'cuda'
     
     # Only change scheduler if needed
     scheduler_class = SCHEDULER_MAP.get(scheduler_name)
@@ -789,8 +766,7 @@ with gr.Blocks(delete_cache=(3600, 10800)) as demo:
     )
 
 if __name__ == "__main__":
-    concurrency = 4 if num_gpus >= 2 else 3
-    demo.queue(max_size=30, default_concurrency_limit=concurrency).launch(
+    demo.queue(max_size=30, default_concurrency_limit=3).launch(
         server_name="0.0.0.0",
         server_port=7860,
         css=CSS,
