@@ -118,7 +118,14 @@ def extract_frame(video_path, timestamp):
 def clear_vram():
     gc.collect()
     torch.cuda.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
 
+
+# Clear any existing CUDA memory from previous runs
+print("Clearing GPU memory from previous runs...")
+clear_vram()
+torch.cuda.reset_peak_memory_stats()
 
 # RIFE
 if not os.path.exists("RIFEv4.26_0921.zip"):
@@ -345,14 +352,25 @@ if gpu_vram_gb <= 24:
 
 # Move components to GPU one at a time to manage memory
 print("Moving quantized model to GPU...")
+print("  - Moving text_encoder...")
 pipe.text_encoder = pipe.text_encoder.to('cuda')
 clear_vram()
+
+print("  - Moving transformer...")
 pipe.transformer = pipe.transformer.to('cuda')
 clear_vram()
+
+print("  - Moving transformer_2...")
 pipe.transformer_2 = pipe.transformer_2.to('cuda')
 clear_vram()
+
+print("  - Moving VAE...")
 pipe.vae = pipe.vae.to('cuda')
 clear_vram()
+
+# Move scheduler to GPU if it has parameters
+if hasattr(pipe, 'scheduler') and hasattr(pipe.scheduler, 'to'):
+    pipe.scheduler = pipe.scheduler.to('cuda')
 
 pipes.append(pipe)
 original_schedulers.append(copy.deepcopy(pipe.scheduler))
