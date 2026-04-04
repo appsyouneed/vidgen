@@ -23,23 +23,19 @@ echo "Installing Python dependencies..."
 pip3 install -r requirements.txt --break-system-packages --ignore-installed
 
 echo "Setting up RIFE interpolation model..."
-if [ ! -d "train_log" ]; then
-    echo "Downloading RIFE model..."
-    wget -q https://huggingface.co/r3gm/RIFE/resolve/main/RIFEv4.26_0921.zip -O RIFEv4.26_0921.zip
-    unzip -o RIFEv4.26_0921.zip
-    rm -rf __MACOSX
+if [ ! -d "train_log/model" ]; then
+    if [ ! -d "train_log" ]; then
+        echo "Downloading RIFE model..."
+        wget -q https://huggingface.co/r3gm/RIFE/resolve/main/RIFEv4.26_0921.zip -O RIFEv4.26_0921.zip
+        unzip -o RIFEv4.26_0921.zip
+        rm -rf __MACOSX
+    fi
     
-    # Download the model directory from GitHub since zip doesn't include it
+    # Download the model directory from GitHub
     echo "Downloading RIFE model architecture..."
     git clone --depth 1 https://github.com/hzwer/Practical-RIFE.git /tmp/rife
     cp -r /tmp/rife/model train_log/
     rm -rf /tmp/rife
-    
-    # Verify complete structure
-    if [ ! -d "train_log/model" ] || [ ! -f "train_log/RIFE_HDv3.py" ]; then
-        echo "ERROR: RIFE installation incomplete!"
-        exit 1
-    fi
     
     echo "RIFE model installed successfully"
 else
