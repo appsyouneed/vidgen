@@ -11,52 +11,55 @@ echo "Creating cache directory..."
 mkdir -p /root/.cache/huggingface
 
 echo "Installing system dependencies..."
-apt-get update && apt-get install -y python3-pip python3-venv ffmpeg wget unzip
-
-if [ ! -d "venv" ]; then
-    echo "Creating virtual environment..."
-    python3 -m venv venv
-fi
-
-echo "Activating virtual environment..."
-source venv/bin/activate
+apt-get update && apt-get install -y python3-pip ffmpeg wget unzip git
 
 echo "Upgrading pip..."
-pip install --upgrade pip
+pip3 install --upgrade pip --break-system-packages
 
 echo "Installing PyTorch with CUDA 12.4 support..."
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu124 --break-system-packages --ignore-installed
 
 echo "Installing Python dependencies..."
-pip install -r requirements.txt
+pip3 install -r requirements.txt --break-system-packages --ignore-installed
 
 echo "Setting up RIFE interpolation model..."
-if [ ! -f "RIFEv4.26_0921.zip" ]; then
+if [ ! -d "train_log" ]; then
     echo "Downloading RIFE model..."
-    wget -q https://huggingface.co/r3gm/RIFE/resolve/main/RIFEv4.26_0921.zip
+    wget -q https://huggingface.co/r3gm/RIFE/resolve/main/RIFEv4.26_0921.zip -O RIFEv4.26_0921.zip
     unzip -o RIFEv4.26_0921.zip
+    rm -rf __MACOSX
+    
+    # Download the model directory from GitHub since zip doesn't include it
+    echo "Downloading RIFE model architecture..."
+    git clone --depth 1 https://github.com/hzwer/Practical-RIFE.git /tmp/rife
+    cp -r /tmp/rife/model train_log/
+    rm -rf /tmp/rife
+    
+    # Verify complete structure
+    if [ ! -d "train_log/model" ] || [ ! -f "train_log/RIFE_HDv3.py" ]; then
+        echo "ERROR: RIFE installation incomplete!"
+        exit 1
+    fi
+    
+    echo "RIFE model installed successfully"
 else
-    echo "RIFE model already downloaded, skipping..."
-fi
-
-# Verify RIFE structure exists
-if [ ! -d "train_log" ] || [ ! -f "train_log/RIFE_HDv3.py" ]; then
-    echo "ERROR: RIFE model structure not found after extraction!"
-    echo "Expected train_log/RIFE_HDv3.py to exist"
-    exit 1
+    echo "RIFE model already installed, skipping..."
 fi
 
 echo "=== Setup Complete ==="
 echo ""
-echo "Enabling vidgen service..."
+echo "Setting up systemd service..."
+cp vidgen.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable vidgen
 systemctl start vidgen
 
 echo ""
 echo "Service commands:"
-echo "  ./start.sh  - Start vidgen"
-echo "  ./stop.sh   - Stop vidgen"
-echo "  systemctl status vidgen - Check status"
+echo "  systemctl start vidgen   - Start vidgen"
+echo "  systemctl stop vidgen    - Stop vidgen"
+echo "  systemctl status vidgen  - Check status"
+echo "  systemctl restart vidgen - Restart vidgen"
 echo ""
+echo "To run manually: python3 app.py"
 echo "The app will be accessible at: http://0.0.0.0:7860"
