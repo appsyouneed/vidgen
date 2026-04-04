@@ -21,10 +21,16 @@ fi
 echo "Activating virtual environment..."
 source venv/bin/activate
 
-echo "Installing Python dependencies..."
+echo "Upgrading pip..."
+pip install --upgrade pip
+
+echo "Installing PyTorch with CUDA 12.4 support..."
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+
+echo "Installing Python dependencies..."
 pip install -r requirements.txt
 
+echo "Setting up RIFE interpolation model..."
 if [ ! -f "RIFEv4.26_0921.zip" ]; then
     echo "Downloading RIFE model..."
     wget -q https://huggingface.co/r3gm/RIFE/resolve/main/RIFEv4.26_0921.zip
@@ -33,13 +39,11 @@ else
     echo "RIFE model already downloaded, skipping..."
 fi
 
-if [ ! -d "train_log/model" ]; then
-    echo "Downloading RIFE model directory..."
-    git clone https://github.com/hzwer/Practical-RIFE.git /tmp/rife
-    cp -r /tmp/rife/model train_log/
-    rm -rf /tmp/rife
-else
-    echo "RIFE model directory already exists, skipping..."
+# Verify RIFE structure exists
+if [ ! -d "train_log" ] || [ ! -f "train_log/RIFE_HDv3.py" ]; then
+    echo "ERROR: RIFE model structure not found after extraction!"
+    echo "Expected train_log/RIFE_HDv3.py to exist"
+    exit 1
 fi
 
 echo "=== Setup Complete ==="
