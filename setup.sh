@@ -13,9 +13,6 @@ mkdir -p /root/.cache/huggingface
 echo "Installing system dependencies..."
 apt-get update && apt-get install -y python3-pip ffmpeg wget unzip git
 
-echo "Upgrading pip..."
-pip3 install --upgrade pip --break-system-packages
-
 echo "Installing PyTorch with CUDA 12.4 support..."
 pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu124 --break-system-packages --ignore-installed
 
