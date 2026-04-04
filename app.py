@@ -318,7 +318,6 @@ pipe = WanImageToVideoPipeline.from_pretrained(
     MODEL_ID,
     torch_dtype=torch.bfloat16,
     cache_dir=CACHE_DIR,
-    resume_download=True,
     local_files_only=False,
 )
 
@@ -328,6 +327,23 @@ original_schedulers = []
 
 print("Creating 1 pipeline instance")
 
+# Detect GPU VRAM
+gpu_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+print(f"Detected GPU VRAM: {gpu_vram_gb:.1f} GB")
+
+# Apply quantization BEFORE moving to GPU to avoid OOM
+print("Applying quantization on CPU...")
+quantize_(pipe.text_encoder, Int8WeightOnlyConfig())
+quantize_(pipe.transformer, Float8DynamicActivationFloat8WeightConfig())
+quantize_(pipe.transformer_2, Float8DynamicActivationFloat8WeightConfig())
+
+# Enable VAE optimizations for GPUs with <=24GB VRAM
+if gpu_vram_gb <= 24:
+    print("Enabling VAE slicing and tiling for memory optimization...")
+    pipe.vae.enable_slicing()
+    pipe.vae.enable_tiling()
+
+print("Moving quantized model to GPU...")
 pipe.to('cuda')
 pipes.append(pipe)
 original_schedulers.append(copy.deepcopy(pipe.scheduler))
