@@ -344,33 +344,34 @@ quantize_(pipe.text_encoder, Int8WeightOnlyConfig())
 quantize_(pipe.transformer, Float8DynamicActivationFloat8WeightConfig())
 quantize_(pipe.transformer_2, Float8DynamicActivationFloat8WeightConfig())
 
-# Enable VAE optimizations for GPUs with <=24GB VRAM
-if gpu_vram_gb <= 24:
-    print("Enabling VAE slicing and tiling for memory optimization...")
-    pipe.vae.enable_slicing()
-    pipe.vae.enable_tiling()
+# Enable VAE optimizations for all GPUs to reduce memory
+print("Enabling VAE slicing and tiling for memory optimization...")
+pipe.vae.enable_slicing()
+pipe.vae.enable_tiling()
 
-# Move components to GPU one at a time to manage memory
-print("Moving quantized model to GPU...")
-print("  - Moving text_encoder...")
-pipe.text_encoder = pipe.text_encoder.to('cuda')
-clear_vram()
-
-print("  - Moving transformer...")
-pipe.transformer = pipe.transformer.to('cuda')
-clear_vram()
-
-print("  - Moving transformer_2...")
-pipe.transformer_2 = pipe.transformer_2.to('cuda')
-clear_vram()
-
-print("  - Moving VAE...")
-pipe.vae = pipe.vae.to('cuda')
-clear_vram()
-
-# Move scheduler to GPU if it has parameters
-if hasattr(pipe, 'scheduler') and hasattr(pipe.scheduler, 'to'):
-    pipe.scheduler = pipe.scheduler.to('cuda')
+# Enable CPU offloading for 32GB or less
+if gpu_vram_gb <= 32:
+    print("Enabling model CPU offloading for memory optimization...")
+    pipe.enable_model_cpu_offload()
+    print("Model loaded with CPU offloading enabled")
+else:
+    # Move components to GPU one at a time for larger GPUs
+    print("Moving quantized model to GPU...")
+    print("  - Moving text_encoder...")
+    pipe.text_encoder = pipe.text_encoder.to('cuda')
+    clear_vram()
+    
+    print("  - Moving transformer...")
+    pipe.transformer = pipe.transformer.to('cuda')
+    clear_vram()
+    
+    print("  - Moving transformer_2...")
+    pipe.transformer_2 = pipe.transformer_2.to('cuda')
+    clear_vram()
+    
+    print("  - Moving VAE...")
+    pipe.vae = pipe.vae.to('cuda')
+    clear_vram()
 
 pipes.append(pipe)
 original_schedulers.append(copy.deepcopy(pipe.scheduler))
