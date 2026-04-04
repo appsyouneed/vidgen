@@ -343,8 +343,17 @@ if gpu_vram_gb <= 24:
     pipe.vae.enable_slicing()
     pipe.vae.enable_tiling()
 
+# Move components to GPU one at a time to manage memory
 print("Moving quantized model to GPU...")
-pipe.to('cuda')
+pipe.text_encoder = pipe.text_encoder.to('cuda')
+clear_vram()
+pipe.transformer = pipe.transformer.to('cuda')
+clear_vram()
+pipe.transformer_2 = pipe.transformer_2.to('cuda')
+clear_vram()
+pipe.vae = pipe.vae.to('cuda')
+clear_vram()
+
 pipes.append(pipe)
 original_schedulers.append(copy.deepcopy(pipe.scheduler))
 _scheduler_locks.append(threading.Lock())
