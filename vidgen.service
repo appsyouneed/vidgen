@@ -17,8 +17,8 @@ ExecStartPre=/bin/chmod 1777 /root/vidgen/tmp
 ExecStart=/usr/bin/python3 /root/vidgen/app.py
 Restart=always
 RestartSec=10
-StandardOutput=journal
-StandardError=journal
+StandardOutput=append:/root/vidgen/vidgen.log
+StandardError=append:/root/vidgen/vidgen.log
 
 [Install]
 WantedBy=multi-user.target
