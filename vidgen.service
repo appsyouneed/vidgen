@@ -5,16 +5,14 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root/vidgen
+WorkingDirectory=/root/termux/vidgen
 Environment="PYTHONUNBUFFERED=1"
-Environment="HF_HOME=/root/.cache/huggingface"
+Environment="HF_HOME=/root/.cache/vidgen_models"
+Environment="TRANSFORMERS_CACHE=/root/.cache/vidgen_models"
 Environment="PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
-Environment="TMPDIR=/root/vidgen/tmp"
-Environment="TEMP=/root/vidgen/tmp"
-Environment="TMP=/root/vidgen/tmp"
 ExecStartPre=/bin/mkdir -p /root/vidgen/tmp
 ExecStartPre=/bin/chmod 1777 /root/vidgen/tmp
-ExecStart=/usr/bin/python3 /root/vidgen/app.py
+ExecStart=/usr/bin/env python3 /root/termux/vidgen/app.py --cache-dir /root/.cache/vidgen_models
 Restart=always
 RestartSec=10
 StandardOutput=append:/root/vidgen/vidgen.log

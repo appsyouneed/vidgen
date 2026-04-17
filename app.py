@@ -1,439 +1,173 @@
-import os
-import shutil
-import subprocess
-import sys
-import copy
-import random
-import tempfile
-import warnings
-import time
+import argparse
 import gc
-import uuid
-import threading
-from tqdm import tqdm
-
-# Set temp directory before torch imports
-os.makedirs("/root/vidgen/tmp", exist_ok=True)
-os.environ["TMPDIR"] = "/root/vidgen/tmp"
-os.environ["TEMP"] = "/root/vidgen/tmp"
-os.environ["TMP"] = "/root/vidgen/tmp"
-
+import os
+import logging
+import warnings
 import cv2
-import numpy as np
 import torch
 import torch._dynamo
+from diffusers.pipelines.wan.pipeline_wan_i2v import WanImageToVideoPipeline
+from diffusers.models.transformers.transformer_wan import WanTransformer3DModel
+from diffusers.utils.export_utils import export_to_video
+import gradio as gr
+import numpy as np
+from PIL import Image
+import random
+
+# Suppress all library loggers to prevent prompts/inputs leaking into logs
+logging.getLogger("diffusers").setLevel(logging.ERROR)
+logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("accelerate").setLevel(logging.ERROR)
+logging.getLogger("gradio").setLevel(logging.ERROR)
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+os.environ["DIFFUSERS_VERBOSITY"] = "error"
+warnings.filterwarnings("ignore")
+
+# Performance optimizations
 torch._dynamo.config.suppress_errors = True
 torch.set_float32_matmul_precision('high')
 torch.backends.cudnn.benchmark = True
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
-torch.set_num_threads(8)
-torch.set_num_interop_threads(4)
-from huggingface_hub import list_models
-from torch.nn import functional as F
-from PIL import Image
-
-import gradio as gr
-from diffusers import (
-    FlowMatchEulerDiscreteScheduler,
-    SASolverScheduler,
-    DEISMultistepScheduler,
-    DPMSolverMultistepInverseScheduler,
-    UniPCMultistepScheduler,
-    DPMSolverMultistepScheduler,
-    DPMSolverSinglestepScheduler,
-)
-from diffusers.pipelines.wan.pipeline_wan_i2v import WanImageToVideoPipeline
-from diffusers.utils.export_utils import export_to_video
-
-from torchao.quantization import quantize_, Float8DynamicActivationFloat8WeightConfig, Int8WeightOnlyConfig
-
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-os.environ["HF_HUB_DISABLE_EXPERIMENTAL_WARNING"] = "1"
-os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
-os.environ["TRANSFORMERS_CACHE"] = "/root/.cache/huggingface"
-os.environ["HF_HOME"] = "/root/.cache/huggingface"
 os.environ["CUDA_LAUNCH_BLOCKING"] = "0"
-os.environ["OMP_NUM_THREADS"] = "8"
 
-warnings.filterwarnings("ignore")
+_last_video_path = None
+_last_video_bytes = None
 
-# --- FRAME EXTRACTION JS & LOGIC ---
+parser = argparse.ArgumentParser()
+parser.add_argument("--no-lora", action="store_true", help="Disable Lightning LoRA (uses base model, better prompt following, slower — recommend 20-30 steps)")
+parser.add_argument("--no-quantize", action="store_true", help="Disable fp8/int8 quantization (uses full bf16, best quality, needs ~28GB+ VRAM)")
+parser.add_argument("--cache-dir", type=str, default=os.path.expanduser("~/.cache/vidgen_models"), help="Directory to cache downloaded models (default: ~/.cache/vidgen_models)")
+parser.add_argument("--port", type=int, default=7860, help="Port to run Gradio on (default: 7860)")
+parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to bind Gradio to (default: 0.0.0.0)")
+parser.add_argument("--share", action="store_true", help="Create a public Gradio share link")
+args = parser.parse_args()
 
-# JS to grab timestamp from the output video
-get_timestamp_js = """
-function() {
-    // Select the video element specifically inside the component with id 'generated-video'
-    const video = document.querySelector('#generated-video video');
-    
-    if (video) {
-        console.log("Video found! Time: " + video.currentTime);
-        return video.currentTime;
-    } else {
-        console.log("No video element found.");
-        return 0;
-    }
-}
-"""
+os.makedirs(args.cache_dir, exist_ok=True)
+OUTPUT_DIR = "/root/vidgen/tmp"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-
-def extract_frame(video_path, timestamp):
-    # Safety check: if no video is present
-    if not video_path:
-        return None
-    
-    print(f"Extracting frame at timestamp: {timestamp}") 
-    
-    cap = cv2.VideoCapture(video_path)
-    
-    if not cap.isOpened():
-        return None
-
-    # Calculate frame number
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    target_frame_num = int(float(timestamp) * fps)
-    
-    # Cap total frames to prevent errors at the very end of video
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    if target_frame_num >= total_frames:
-        target_frame_num = total_frames - 1
-    
-    # Set position
-    cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame_num)
-    ret, frame = cap.read()
-    cap.release()
-    
-    if ret:
-        # Convert from BGR (OpenCV) to RGB (Gradio)
-        # Gradio Image component handles Numpy array -> PIL conversion automatically
-        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    
-    return None
-
-# --- END FRAME EXTRACTION LOGIC ---
-
-
-def clear_vram():
-    gc.collect()
-    torch.cuda.empty_cache()
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
-
-
-# Clear any existing CUDA memory from previous runs
-print("Clearing GPU memory from previous runs...")
-clear_vram()
-torch.cuda.reset_peak_memory_stats()
-
-# RIFE
-if not os.path.exists("RIFEv4.26_0921.zip"):
-    print("Downloading RIFE Model...")
-    subprocess.run([
-        "wget", "-q",
-        "https://huggingface.co/r3gm/RIFE/resolve/main/RIFEv4.26_0921.zip",
-        "-O", "RIFEv4.26_0921.zip"
-    ], check=True)
-    subprocess.run(["unzip", "-o", "RIFEv4.26_0921.zip"], check=True)
-
-sys.path.append(os.path.join(os.getcwd(), "train_log"))
-
-from train_log.RIFE_HDv3 import Model
-device = torch.device("cuda")
-
-# Thread-local storage for pipeline assignment
-_thread_local = threading.local()
-_pipeline_lock = threading.Lock()
-_pipeline_counter = 0
-_scheduler_locks = []
-
-def get_assigned_pipeline():
-    """Assign pipeline to thread in round-robin fashion"""
-    global _pipeline_counter
-    if not hasattr(_thread_local, 'pipe_id'):
-        with _pipeline_lock:
-            _thread_local.pipe_id = 0
-            _pipeline_counter += 1
-            print(f"Thread {threading.current_thread().name} assigned to pipeline {_thread_local.pipe_id}")
-    return _thread_local.pipe_id
-
-rife_model = Model()
-rife_model.load_model("train_log", -1)
-rife_model.eval()
-
-
-@torch.no_grad()
-def interpolate_bits(frames_np, multiplier=2, scale=1.0):
-    """
-    Interpolation maintaining Numpy Float 0-1 format.
-    Args:
-        frames_np: Numpy Array (Time, Height, Width, Channels) - Float32 [0.0, 1.0]
-        multiplier: int (2, 4, 8)
-    Returns:
-        List of Numpy Arrays (Height, Width, Channels) - Float32 [0.0, 1.0]
-    """
-    
-    # Handle input shape
-    if isinstance(frames_np, list):
-        # Convert list of arrays to one big array for easier shape handling if needed, 
-        # but here we just grab dims from first frame
-        T = len(frames_np)
-        H, W, C = frames_np[0].shape
-    else:
-        T, H, W, C = frames_np.shape
-
-    # 1. No Interpolation Case
-    if multiplier < 2:
-        # Just convert 4D array to list of 3D arrays
-        if isinstance(frames_np, np.ndarray):
-            return list(frames_np)
-        return frames_np
-
-    n_interp = multiplier - 1
-    
-    # Pre-calc padding for RIFE (requires dimensions divisible by 32/scale)
-    tmp = max(128, int(128 / scale))
-    ph = ((H - 1) // tmp + 1) * tmp
-    pw = ((W - 1) // tmp + 1) * tmp
-    padding = (0, pw - W, 0, ph - H)
-
-    # Helper: Numpy (H, W, C) Float -> Tensor (1, C, H, W) Half
-    def to_tensor(frame_np):
-        # frame_np is float32 0-1
-        t = torch.from_numpy(frame_np).to(device)
-        # HWC -> CHW
-        t = t.permute(2, 0, 1).unsqueeze(0)
-        return F.pad(t, padding).half()
-
-    # Helper: Tensor (1, C, H, W) Half -> Numpy (H, W, C) Float
-    def from_tensor(tensor):
-        # Crop padding
-        t = tensor[0, :, :H, :W]
-        # CHW -> HWC
-        t = t.permute(1, 2, 0)
-        # Keep as float32, range 0-1
-        return t.float().cpu().numpy()
-
-    def make_inference(I0, I1, n):
-        if rife_model.version >= 3.9:
-            res = []
-            for i in range(n):
-                res.append(rife_model.inference(I0, I1, (i+1) * 1. / (n+1), scale))
-            return res
-        else:
-            middle = rife_model.inference(I0, I1, scale)
-            if n == 1:
-                return [middle]
-            first_half = make_inference(I0, middle, n=n//2)
-            second_half = make_inference(middle, I1, n=n//2)
-            if n % 2:
-                return [*first_half, middle, *second_half]
-            else:
-                return [*first_half, *second_half]
-
-    output_frames = []
-
-    # Process Frames
-    # Load first frame into GPU
-    I1 = to_tensor(frames_np[0])
-
-    total_steps = T - 1
-
-    with tqdm(total=total_steps, desc="Interpolating", unit="frame") as pbar:
-    
-        for i in range(total_steps):
-            I0 = I1
-            # Add original frame to output
-            output_frames.append(from_tensor(I0))
-    
-            # Load next frame
-            I1 = to_tensor(frames_np[i+1])
-    
-            # Generate intermediate frames
-            mid_tensors = make_inference(I0, I1, n_interp)
-    
-            # Append intermediate frames
-            for mid in mid_tensors:
-                output_frames.append(from_tensor(mid))
-
-            if (i + 1) % 50 == 0:
-                pbar.update(50)
-        pbar.update(total_steps % 50)
-        
-        # Add the very last frame
-        output_frames.append(from_tensor(I1))
-    
-    # Cleanup
-    del I0, I1, mid_tensors
-    torch.cuda.empty_cache()
-
-    return output_frames
-
-
-# WAN
-
-ORG_NAME = "TestOrganizationPleaseIgnore"
-# MODEL_ID = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
-MODEL_ID = os.getenv("REPO_ID") or random.choice(
-    list(list_models(author=ORG_NAME, filter='diffusers:WanImageToVideoPipeline'))
-).modelId
-CACHE_DIR = os.path.expanduser("~/.cache/huggingface/")
-os.makedirs(CACHE_DIR, exist_ok=True)
-
-LORA_MODELS = [
-    # {
-    #     "repo_id": "exampleuser/example_lora_1",
-    #     "high_tr": "example_lora_1_high.safetensors",
-    #     "low_tr": "example_lora_1_low.safetensors",
-    #     "high_scale": 0.5,
-    #     "low_scale": 0.5
-    # },
-    # {
-    #     "repo_id": "exampleuser/example_lora_2",
-    #     "high_tr": "subfolder/example_lora_2_high.safetensors",
-    #     "low_tr": "subfolder/example_lora_2_low.safetensors",
-    #     "high_scale": 0.4,
-    #     "low_scale": 0.4
-    # },
-]
+MODEL_ID = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
+TRANSFORMER_ID = "cbensimon/Wan2.2-I2V-A14B-bf16-Diffusers"
 
 MAX_DIM = 832
 MIN_DIM = 480
 SQUARE_DIM = 640
 MULTIPLE_OF = 16
+
 MAX_SEED = np.iinfo(np.int32).max
 
 FIXED_FPS = 16
 MIN_FRAMES_MODEL = 8
-MAX_FRAMES_MODEL = 160
+MAX_FRAMES_MODEL = 240
 
 MIN_DURATION = round(MIN_FRAMES_MODEL / FIXED_FPS, 1)
 MAX_DURATION = round(MAX_FRAMES_MODEL / FIXED_FPS, 1)
 
-SCHEDULER_MAP = {
-    "FlowMatchEulerDiscrete": FlowMatchEulerDiscreteScheduler,
-    "SASolver": SASolverScheduler,
-    "DEISMultistep": DEISMultistepScheduler,
-    "DPMSolverMultistepInverse": DPMSolverMultistepInverseScheduler,
-    "UniPCMultistep": UniPCMultistepScheduler,
-    "DPMSolverMultistep": DPMSolverMultistepScheduler,
-    "DPMSolverSinglestep": DPMSolverSinglestepScheduler,
-}
-
-pipe = WanImageToVideoPipeline.from_pretrained(
-    MODEL_ID,
-    torch_dtype=torch.bfloat16,
-    cache_dir=CACHE_DIR,
-    local_files_only=False,
-)
-
-# Create 1 pipeline instance for single GPU
-pipes = []
-original_schedulers = []
-
-print("Creating 1 pipeline instance")
-
-# Detect GPU VRAM
-gpu_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-print(f"Detected GPU VRAM: {gpu_vram_gb:.1f} GB")
-
-# Apply quantization BEFORE moving to GPU to avoid OOM
-print("Applying quantization on CPU...")
-quantize_(pipe.text_encoder, Int8WeightOnlyConfig())
-quantize_(pipe.transformer, Float8DynamicActivationFloat8WeightConfig())
-quantize_(pipe.transformer_2, Float8DynamicActivationFloat8WeightConfig())
-
-# Enable VAE optimizations for all GPUs to reduce memory
-print("Enabling VAE slicing and tiling for memory optimization...")
-pipe.vae.enable_slicing()
-pipe.vae.enable_tiling()
-
-# Enable CPU offloading for 32GB or less
-if gpu_vram_gb <= 32:
-    print("Enabling model CPU offloading for memory optimization...")
-    pipe.enable_model_cpu_offload()
-    print("Model loaded with CPU offloading enabled")
-else:
-    # Move components to GPU one at a time for larger GPUs
-    print("Moving quantized model to GPU...")
-    print("  - Moving text_encoder...")
-    pipe.text_encoder = pipe.text_encoder.to('cuda')
-    clear_vram()
-    
-    print("  - Moving transformer...")
-    pipe.transformer = pipe.transformer.to('cuda')
-    clear_vram()
-    
-    print("  - Moving transformer_2...")
-    pipe.transformer_2 = pipe.transformer_2.to('cuda')
-    clear_vram()
-    
-    print("  - Moving VAE...")
-    pipe.vae = pipe.vae.to('cuda')
-    clear_vram()
-
-pipes.append(pipe)
-original_schedulers.append(copy.deepcopy(pipe.scheduler))
-_scheduler_locks.append(threading.Lock())
-
-print(f"Total pipeline instances: {len(pipes)}")
-
-for i, lora in enumerate(LORA_MODELS):
-    name_high_tr = lora["high_tr"].split(".")[0].split("/")[-1] + "Hh"
-    name_low_tr = lora["low_tr"].split(".")[0].split("/")[-1] + "Ll"
-    
-    try:
-        # Apply LoRA to all pipeline instances
-        for pipe_idx, current_pipe in enumerate(pipes):
-            current_pipe.load_lora_weights(
-                lora["repo_id"],
-                weight_name=lora["high_tr"],
-                adapter_name=name_high_tr
-            )
-        
-            kwargs_lora = {"load_into_transformer_2": True}
-            current_pipe.load_lora_weights(
-                lora["repo_id"],
-                weight_name=lora["low_tr"],
-                adapter_name=name_low_tr,
-                **kwargs_lora
-            )
-        
-            current_pipe.set_adapters([name_high_tr, name_low_tr], adapter_weights=[1.0, 1.0])
-        
-            current_pipe.fuse_lora(adapter_names=[name_high_tr], lora_scale=lora["high_scale"], components=["transformer"])
-            current_pipe.fuse_lora(adapter_names=[name_low_tr], lora_scale=lora["low_scale"], components=["transformer_2"])
-        
-            current_pipe.unload_lora_weights()
-
-        print(f"Applied LoRA to pipeline: {lora['high_tr']}, hs={lora['high_scale']}/ls={lora['low_scale']}, {i+1}/{len(LORA_MODELS)}") 
-    except Exception as e:
-        print("Error:", str(e))
-        print("Failed LoRA:", name_high_tr)
-        for current_pipe in pipes:
-            current_pipe.unload_lora_weights()
-
 default_prompt_i2v = "make this image come alive, cinematic motion, smooth animation"
 default_negative_prompt = "色调艳丽, 过曝, 静态, 细节模糊不清, 字幕, 风格, 作品, 画作, 画面, 静止, 整体发灰, 最差质量, 低质量, JPEG压缩残留, 丑陋的, 残缺的, 多余的手指, 画得不好的手部, 画得不好的脸部, 畸形的, 毁容的, 形态畸形的肢体, 手指融合, 静止不动的画面, 杂乱的背景, 三条腿, 背景人很多, 倒着走"
 
+print(f"Loading model... (cache dir: {args.cache_dir})")
+print(f"Quantization: {'DISABLED (full bf16)' if args.no_quantize else 'ENABLED (fp8/int8)'}")
 
-def model_title():
-    repo_name = MODEL_ID.split('/')[-1].replace("_", " ")
-    url = f"https://huggingface.co/{MODEL_ID}"
-    return f"## This space is currently running [{repo_name}]({url}) 🐢"
+pipe = WanImageToVideoPipeline.from_pretrained(
+    MODEL_ID,
+    transformer=WanTransformer3DModel.from_pretrained(
+        TRANSFORMER_ID,
+        subfolder="transformer",
+        torch_dtype=torch.bfloat16,
+        device_map="cuda",
+        cache_dir=args.cache_dir,
+    ),
+    transformer_2=WanTransformer3DModel.from_pretrained(
+        TRANSFORMER_ID,
+        subfolder="transformer_2",
+        torch_dtype=torch.bfloat16,
+        device_map="cuda",
+        cache_dir=args.cache_dir,
+    ),
+    torch_dtype=torch.bfloat16,
+    cache_dir=args.cache_dir,
+).to("cuda")
+
+if not args.no_lora:
+    pipe.load_lora_weights(
+        "Kijai/WanVideo_comfy",
+        weight_name="Lightx2v/lightx2v_I2V_14B_480p_cfg_step_distill_rank128_bf16.safetensors",
+        adapter_name="lightx2v",
+        cache_dir=args.cache_dir,
+    )
+    kwargs_lora = {"load_into_transformer_2": True}
+    pipe.load_lora_weights(
+        "Kijai/WanVideo_comfy",
+        weight_name="Lightx2v/lightx2v_I2V_14B_480p_cfg_step_distill_rank128_bf16.safetensors",
+        adapter_name="lightx2v_2",
+        cache_dir=args.cache_dir,
+        **kwargs_lora,
+    )
+    pipe.set_adapters(["lightx2v", "lightx2v_2"], adapter_weights=[1.0, 1.0])
+    pipe.fuse_lora(adapter_names=["lightx2v"], lora_scale=3.0, components=["transformer"])
+    pipe.fuse_lora(adapter_names=["lightx2v_2"], lora_scale=1.0, components=["transformer_2"])
+    pipe.unload_lora_weights()
+    print("Lightning LoRA loaded.")
+else:
+    print("Lightning LoRA DISABLED — using base model.")
+
+if not args.no_quantize:
+    from torchao.quantization import quantize_, Float8DynamicActivationFloat8WeightConfig, Int8WeightOnlyConfig
+    print("Applying quantization...")
+    quantize_(pipe.text_encoder, Int8WeightOnlyConfig())
+    quantize_(pipe.transformer, Float8DynamicActivationFloat8WeightConfig())
+    quantize_(pipe.transformer_2, Float8DynamicActivationFloat8WeightConfig())
+
+print("Model ready.")
+pipe.enable_vae_slicing()
+pipe.enable_vae_tiling()
+
+
+get_timestamp_js = """
+function() {
+    const video = document.querySelector('#generated-video video');
+    const t = video ? video.currentTime : 0;
+    // Append a random suffix so the value always changes, guaranteeing .change() fires
+    return t + ":" + Math.random();
+}
+"""
+
+
+def extract_frame(video_path, timestamp_str):
+    if not video_path or not timestamp_str:
+        return None
+    try:
+        timestamp = float(str(timestamp_str).split(":")[0])
+    except (ValueError, IndexError):
+        return None
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return None
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    target_frame = min(int(float(timestamp) * fps), total_frames - 1)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+    ret, frame = cap.read()
+    cap.release()
+    if ret:
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    return None
 
 
 def resize_image(image: Image.Image) -> Image.Image:
     width, height = image.size
     if width == height:
         return image.resize((SQUARE_DIM, SQUARE_DIM), Image.LANCZOS)
-    
+
     aspect_ratio = width / height
     MAX_ASPECT_RATIO = MAX_DIM / MIN_DIM
     MIN_ASPECT_RATIO = MIN_DIM / MAX_DIM
-
     image_to_resize = image
+
     if aspect_ratio > MAX_ASPECT_RATIO:
         target_w, target_h = MAX_DIM, MIN_DIM
         crop_width = int(round(height * MAX_ASPECT_RATIO))
@@ -459,16 +193,6 @@ def resize_image(image: Image.Image) -> Image.Image:
     return image_to_resize.resize((final_w, final_h), Image.LANCZOS)
 
 
-def resize_and_crop_to_match(target_image, reference_image):
-    ref_width, ref_height = reference_image.size
-    target_width, target_height = target_image.size
-    scale = max(ref_width / target_width, ref_height / target_height)
-    new_width, new_height = int(target_width * scale), int(target_height * scale)
-    resized = target_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-    left, top = (new_width - ref_width) // 2, (new_height - ref_height) // 2
-    return resized.crop((left, top, left + ref_width, top + ref_height))
-
-
 def get_num_frames(duration_seconds: float):
     return 1 + int(np.clip(
         int(round(duration_seconds * FIXED_FPS)),
@@ -477,76 +201,50 @@ def get_num_frames(duration_seconds: float):
     ))
 
 
-def get_inference_duration(
-    resized_image,
-    processed_last_image,
+def generate_video(
+    input_image,
+    last_image,
     prompt,
     steps,
     negative_prompt,
-    num_frames,
+    duration_seconds,
     guidance_scale,
     guidance_scale_2,
-    current_seed,
-    scheduler_name,
     flow_shift,
-    frame_multiplier,
     quality,
-    duration_seconds,
-    progress
-):
-    # Not needed for dedicated GPU, but kept for compatibility
-    return 10
-
-
-def run_inference(
-    resized_image,
-    processed_last_image,
-    prompt,
-    steps,
-    negative_prompt,
-    num_frames,
-    guidance_scale,
-    guidance_scale_2,
-    current_seed,
-    scheduler_name,
-    flow_shift,
-    frame_multiplier,
-    quality,
-    duration_seconds,
+    seed,
+    randomize_seed,
     progress=gr.Progress(track_tqdm=True),
 ):
-    # Get assigned pipeline for this thread
-    pipe_id = get_assigned_pipeline()
-    current_pipe = pipes[pipe_id]
-    target_device = 'cuda'
-    
-    # Only change scheduler if needed
-    scheduler_class = SCHEDULER_MAP.get(scheduler_name)
-    needs_scheduler_change = (
-        scheduler_class.__name__ != current_pipe.scheduler.config._class_name or 
-        flow_shift != current_pipe.scheduler.config.get("flow_shift", 6.0)
-    )
-    
-    if needs_scheduler_change:
-        config = copy.deepcopy(original_schedulers[pipe_id].config)
-        if scheduler_class == FlowMatchEulerDiscreteScheduler:
-            config['shift'] = flow_shift
-        else:
-            config['flow_shift'] = flow_shift
-        new_scheduler = scheduler_class.from_config(config)
-        current_pipe.scheduler = new_scheduler
+    if input_image is None:
+        raise gr.Error("Please upload an input image.")
 
-    clear_vram()
+    global _last_video_path, _last_video_bytes
 
-    task_name = str(uuid.uuid4())[:8]
-    print(f"Generating {num_frames} frames on {target_device}, task: {task_name}, {duration_seconds}, {resized_image.size}")
-    start = time.time()
-    
-    generator = torch.Generator(device=target_device).manual_seed(current_seed)
-    
-    result = current_pipe(
+    # Clear previous video from disk and memory before starting
+    if _last_video_path and os.path.exists(_last_video_path):
+        os.remove(_last_video_path)
+        _last_video_path = None
+    _last_video_bytes = None
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    num_frames = get_num_frames(duration_seconds)
+    current_seed = random.randint(0, MAX_SEED) if randomize_seed else int(seed)
+    resized_image = resize_image(input_image)
+
+    resized_last_image = None
+    if last_image is not None:
+        resized_last_image = resize_image(last_image)
+
+    # Free PIL image references (Gradio temp files are managed by Gradio itself)
+    input_image = None
+    last_image = None
+
+    pipe.scheduler.flow_shift = float(flow_shift)
+
+    call_kwargs = dict(
         image=resized_image,
-        last_image=processed_last_image,
         prompt=prompt,
         negative_prompt=negative_prompt,
         height=resized_image.height,
@@ -555,238 +253,77 @@ def run_inference(
         guidance_scale=float(guidance_scale),
         guidance_scale_2=float(guidance_scale_2),
         num_inference_steps=int(steps),
-        generator=generator,
-        output_type="np" 
+        generator=torch.Generator(device="cuda").manual_seed(current_seed),
     )
-    print("gen time passed:", time.time() - start)
-    
-    raw_frames_np = result.frames[0]  # Returns (T, H, W, C) float32
-    current_pipe.scheduler = original_schedulers[pipe_id]
+    if resized_last_image is not None:
+        call_kwargs["last_image"] = resized_last_image
 
-    frame_factor = frame_multiplier // FIXED_FPS
-    if frame_factor > 1:
-        start = time.time()
-        print(f"Processing frames (RIFE Multiplier: {frame_factor}x)...")
-        rife_model.device()
-        rife_model.flownet = rife_model.flownet.half()
-        final_frames = interpolate_bits(raw_frames_np, multiplier=int(frame_factor))
-        print("Interpolation time passed:", time.time() - start)
-    else:
-        final_frames = list(raw_frames_np)
+    output_frames_list = pipe(**call_kwargs).frames[0]
 
-    final_fps = FIXED_FPS * int(frame_factor)
+    video_path = os.path.join(OUTPUT_DIR, "vidgen_output.mp4")
+    export_to_video(output_frames_list, video_path, fps=FIXED_FPS, quality=int(quality))
+    output_frames_list = None
 
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmpfile:
-        video_path = tmpfile.name
+    # Read into memory so the file can be deleted after Gradio serves it
+    with open(video_path, "rb") as f:
+        _last_video_bytes = f.read()
+    _last_video_path = video_path
 
-    start = time.time()
-    with tqdm(total=3, desc="Rendering Media", unit="clip") as pbar:
-        pbar.update(2)
-        export_to_video(final_frames, video_path, fps=final_fps, quality=quality)
-        pbar.update(1)
-    print(f"Export time passed, {final_fps} FPS:", time.time() - start)
-
-    return video_path, task_name
+    return video_path, current_seed
 
 
-def generate_video(
-    input_image,
-    last_image,
-    prompt,
-    steps=4,
-    negative_prompt=default_negative_prompt,
-    duration_seconds=MAX_DURATION,
-    guidance_scale=1,
-    guidance_scale_2=1,
-    seed=42,
-    randomize_seed=False,
-    quality=5,
-    scheduler="UniPCMultistep",
-    flow_shift=6.0,
-    frame_multiplier=16,
-    video_component=True,
-    progress=gr.Progress(track_tqdm=True),
-):
-    """
-    Generate a video from an input image using the Wan 2.2 14B I2V model with Lightning LoRA.
-    This function takes an input image and generates a video animation based on the provided
-    prompt and parameters. It uses an FP8 qunatized Wan 2.2 14B Image-to-Video model in with Lightning LoRA
-    for fast generation in 4-8 steps.
-    Args:
-        input_image (PIL.Image): The input image to animate. Will be resized to target dimensions.
-        last_image (PIL.Image, optional): The optional last image for the video.
-        prompt (str): Text prompt describing the desired animation or motion.
-        steps (int, optional): Number of inference steps. More steps = higher quality but slower.
-            Defaults to 4. Range: 1-30.
-        negative_prompt (str, optional): Negative prompt to avoid unwanted elements.
-            Defaults to default_negative_prompt (contains unwanted visual artifacts).
-        duration_seconds (float, optional): Duration of the generated video in seconds.
-            Defaults to 2. Clamped between MIN_FRAMES_MODEL/FIXED_FPS and MAX_FRAMES_MODEL/FIXED_FPS.
-        guidance_scale (float, optional): Controls adherence to the prompt. Higher values = more adherence.
-            Defaults to 1.0. Range: 0.0-20.0.
-        guidance_scale_2 (float, optional): Controls adherence to the prompt. Higher values = more adherence.
-            Defaults to 1.0. Range: 0.0-20.0.
-        seed (int, optional): Random seed for reproducible results. Defaults to 42.
-            Range: 0 to MAX_SEED (2147483647).
-        randomize_seed (bool, optional): Whether to use a random seed instead of the provided seed.
-            Defaults to False.
-        quality (float, optional): Video output quality. Default is 5. Uses variable bit rate.
-            Highest quality is 10, lowest is 1.
-        scheduler (str, optional): The name of the scheduler to use for inference. Defaults to "UniPCMultistep".
-        flow_shift (float, optional): The flow shift value for compatible schedulers. Defaults to 6.0.
-        frame_multiplier (int, optional): The int value for fps enhancer
-        video_component(bool, optional): Show video player in output.
-            Defaults to True.
-        progress (gr.Progress, optional): Gradio progress tracker. Defaults to gr.Progress(track_tqdm=True).
-    Returns:
-        tuple: A tuple containing:
-            - video_path (str): Path for the video component.
-            - video_path (str): Path for the file download component. Attempt to avoid reconversion in video component.
-            - current_seed (int): The seed used for generation.
-    Raises:
-        gr.Error: If input_image is None (no image uploaded).
-    Note:
-        - Frame count is calculated as duration_seconds * FIXED_FPS (24)
-        - Output dimensions are adjusted to be multiples of MOD_VALUE (32)
-        - The function uses GPU acceleration for inference
-        - Generation time varies based on steps and duration
-    """
-    
-    if input_image is None:
-        raise gr.Error("Please upload an input image.")
-
-    num_frames = get_num_frames(duration_seconds)
-    current_seed = random.randint(0, MAX_SEED) if randomize_seed else int(seed)
-    resized_image = resize_image(input_image)
-
-    processed_last_image = None
-    if last_image:
-        processed_last_image = resize_and_crop_to_match(last_image, resized_image)
-
-    video_path, task_n = run_inference(
-        resized_image,
-        processed_last_image,
-        prompt,
-        steps,
-        negative_prompt,
-        num_frames,
-        guidance_scale,
-        guidance_scale_2,
-        current_seed,
-        scheduler,
-        flow_shift,
-        frame_multiplier,
-        quality,
-        duration_seconds,
-        progress,
-    )
-    print(f"GPU complete: {task_n}")
-
-    return (video_path if video_component else None), video_path, current_seed
-
-
-CSS = """
-#hidden-timestamp {
-    opacity: 0;
-    height: 0px;
-    width: 0px;
-    margin: 0px;
-    padding: 0px;
-    overflow: hidden;
-    position: absolute;
-    pointer-events: none;
-}
-"""
-
-
-with gr.Blocks(delete_cache=(3600, 10800)) as demo:
-    gr.Markdown(model_title())
-    gr.Markdown("#### ℹ️ **A Note on Performance:** This version prioritizes a straightforward setup over maximum speed, so performance may vary.")
-    gr.Markdown("Run Wan 2.2 in just 4-8 steps, fp8 quantization & AoT compilation - compatible with 🧨 diffusers and ZeroGPU")
-
+with gr.Blocks() as demo:
+    gr.Markdown("# Wan 2.2 I2V (14B) with Lightning LoRA")
+    gr.Markdown("Fast 4-8 step image-to-video generation with Lightning LoRA and optional fp8 quantization.")
     with gr.Row():
         with gr.Column():
-            input_image_component = gr.Image(type="pil", label="Input Image", sources=["upload", "clipboard"])
-            prompt_input = gr.Textbox(label="Prompt", value=default_prompt_i2v)
-            duration_seconds_input = gr.Slider(minimum=MIN_DURATION, maximum=MAX_DURATION, step=0.1, value=3.5, label="Duration (seconds)", info=f"Clamped to model's {MIN_FRAMES_MODEL}-{MAX_FRAMES_MODEL} frames at {FIXED_FPS}fps.")
-            frame_multi = gr.Dropdown(
-                choices=[FIXED_FPS, FIXED_FPS*2, FIXED_FPS*4, FIXED_FPS*8],
-                value=FIXED_FPS,
-                label="Video Fluidity (Frames per Second)",
-                info="Extra frames will be generated using flow estimation, which estimates motion between frames to make the video smoother."
+            input_image_component = gr.Image(type="pil", label="First Frame (required)")
+            last_image_component = gr.Image(type="pil", label="Last Frame (optional — guides the ending of the video)")
+            prompt_input = gr.Textbox(label="Prompt", value=default_prompt_i2v, lines=3)
+            duration_seconds_input = gr.Slider(
+                minimum=MIN_DURATION, maximum=MAX_DURATION, step=0.1, value=5.0,
+                label="Duration (seconds)",
+                info=f"Model supports {MIN_FRAMES_MODEL}–{MAX_FRAMES_MODEL} frames at {FIXED_FPS}fps."
             )
+
             with gr.Accordion("Advanced Settings", open=False):
-                last_image_component = gr.Image(type="pil", label="Last Image (Optional)", sources=["upload", "clipboard"])
-                negative_prompt_input = gr.Textbox(label="Negative Prompt", value=default_negative_prompt, info="Used if any Guidance Scale > 1.", lines=3)
-                quality_slider = gr.Slider(minimum=1, maximum=10, step=1, value=7, label="Video Quality", info="If set to 10, the generated video may be too large and won't play in the Gradio preview.")
+                negative_prompt_input = gr.Textbox(label="Negative Prompt", value=default_negative_prompt, lines=3)
                 seed_input = gr.Slider(label="Seed", minimum=0, maximum=MAX_SEED, step=1, value=42, interactive=True)
                 randomize_seed_checkbox = gr.Checkbox(label="Randomize seed", value=True, interactive=True)
-                steps_slider = gr.Slider(minimum=1, maximum=30, step=1, value=4, label="Inference Steps")
-                guidance_scale_input = gr.Slider(minimum=0.0, maximum=10.0, step=0.5, value=1, label="Guidance Scale - high noise stage", info="Values above 1 increase GPU usage and may take longer to process.")
-                guidance_scale_2_input = gr.Slider(minimum=0.0, maximum=10.0, step=0.5, value=1, label="Guidance Scale 2 - low noise stage")
-                scheduler_dropdown = gr.Dropdown(
-                    label="Scheduler",
-                    choices=list(SCHEDULER_MAP.keys()),
-                    value="UniPCMultistep",
-                    info="Select a custom scheduler."
-                )
-                flow_shift_slider = gr.Slider(minimum=0.5, maximum=15.0, step=0.1, value=3.0, label="Flow Shift")
-                play_result_video = gr.Checkbox(label="Display result", value=True, interactive=True)
-                gr.Markdown(f"[ZeroGPU help, tips and troubleshooting](https://huggingface.co/datasets/{ORG_NAME}/help/blob/main/gpu_help.md)")
-                gr.Markdown(  # TestOrganizationPleaseIgnore/wamu-tools
-                    "To use a different model, **duplicate this Space** first, then change the `REPO_ID` environment variable. "
-                    "[See compatible models here](https://huggingface.co/models?other=diffusers:WanImageToVideoPipeline&sort=trending&search=WAN2.2_I2V_LIGHTNING)."
-                )
+                steps_slider = gr.Slider(minimum=1, maximum=30, step=1, value=3, label="Inference Steps")
+                guidance_scale_input = gr.Slider(minimum=0.0, maximum=20.0, step=0.5, value=1.0, label="Guidance Scale (high noise stage)")
+                guidance_scale_2_input = gr.Slider(minimum=0.0, maximum=20.0, step=0.5, value=1.0, label="Guidance Scale 2 (low noise stage)")
+                flow_shift_input = gr.Slider(minimum=0.0, maximum=20.0, step=0.5, value=10.0, label="Flow Shift", info="Controls motion dynamics. Higher = more motion.")
+                quality_slider = gr.Slider(minimum=1, maximum=10, step=1, value=7, label="Video Quality", info="Higher = better quality but larger file size.")
 
             generate_button = gr.Button("Generate Video", variant="primary")
 
         with gr.Column():
-            # ASSIGNED elem_id="generated-video" so JS can find it
-            video_output = gr.Video(label="Generated Video", autoplay=True, sources=["upload"], buttons=["download", "share"], interactive=True, elem_id="generated-video")
-            
-            # --- Frame Grabbing UI ---
+            video_output = gr.Video(label="Generated Video", autoplay=True, interactive=True, sources=["upload"], elem_id="generated-video")
             with gr.Row():
-                grab_frame_btn = gr.Button("📸 Use Current Frame as Input", variant="secondary")
-                timestamp_box = gr.Number(value=0, label="Timestamp", visible=True, elem_id="hidden-timestamp")
-            # -------------------------
-            
-            file_output = gr.File(label="Download Video")
+                grab_frame_btn = gr.Button("📸 Use Current Frame as First Image", variant="secondary")
+                timestamp_box = gr.Textbox(value="", visible=False)
 
     ui_inputs = [
         input_image_component, last_image_component, prompt_input, steps_slider,
         negative_prompt_input, duration_seconds_input,
-        guidance_scale_input, guidance_scale_2_input, seed_input, randomize_seed_checkbox,
-        quality_slider, scheduler_dropdown, flow_shift_slider, frame_multi,
-        play_result_video
+        guidance_scale_input, guidance_scale_2_input,
+        flow_shift_input, quality_slider, seed_input, randomize_seed_checkbox,
     ]
-    
-    generate_button.click(
-        fn=generate_video, 
-        inputs=ui_inputs, 
-        outputs=[video_output, file_output, seed_input],
-    )
-    
-    # --- Frame Grabbing Events ---
-    # 1. Click button -> JS runs -> puts time in hidden number box
-    grab_frame_btn.click(
-        fn=None,
-        inputs=None,
-        outputs=[timestamp_box],
-        js=get_timestamp_js
-    )
-    
-    # 2. Hidden number box changes -> Python runs -> puts frame in Input Image
-    timestamp_box.change(
-        fn=extract_frame,
-        inputs=[video_output, timestamp_box],
-        outputs=[input_image_component]
-    )
+    generate_button.click(fn=generate_video, inputs=ui_inputs, outputs=[video_output, seed_input])
+
+    grab_frame_btn.click(fn=None, inputs=None, outputs=[timestamp_box], js=get_timestamp_js)
+    timestamp_box.change(fn=extract_frame, inputs=[video_output, timestamp_box], outputs=[input_image_component])
+
+css = """
+.gradio-container .contain{max-width: 1000px !important; margin: 0 auto !important}
+"""
 
 if __name__ == "__main__":
-    demo.queue(max_size=30, default_concurrency_limit=1).launch(
-        server_name="0.0.0.0",
-        server_port=7860,
-        css=CSS,
-        show_error=True,
-        max_threads=20,
+    demo.queue().launch(
+        server_name=args.host,
+        server_port=args.port,
+        share=args.share,
+        allowed_paths=[OUTPUT_DIR],
+        css=css,
     )
