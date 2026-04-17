@@ -13,18 +13,10 @@ import threading
 from tqdm import tqdm
 
 # Set temp directory before torch imports
-_APP_DIR = os.path.dirname(os.path.abspath(__file__))
-_TMP_DIR = os.path.join(_APP_DIR, "tmp")
-os.makedirs(_TMP_DIR, exist_ok=True)
-os.environ["TMPDIR"] = _TMP_DIR
-os.environ["TEMP"] = _TMP_DIR
-os.environ["TMP"] = _TMP_DIR
-
-# Set HF cache paths before any HF/diffusers imports
-_HF_CACHE = "/root/.cache/huggingface"
-os.environ["HF_HOME"] = _HF_CACHE
-os.environ["HUGGINGFACE_HUB_CACHE"] = _HF_CACHE
-os.environ["TRANSFORMERS_CACHE"] = _HF_CACHE
+os.makedirs("/root/vidgen/tmp", exist_ok=True)
+os.environ["TMPDIR"] = "/root/vidgen/tmp"
+os.environ["TEMP"] = "/root/vidgen/tmp"
+os.environ["TMP"] = "/root/vidgen/tmp"
 
 import cv2
 import numpy as np
@@ -61,6 +53,8 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 os.environ["HF_HUB_DISABLE_EXPERIMENTAL_WARNING"] = "1"
 os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
+os.environ["TRANSFORMERS_CACHE"] = "/root/.cache/huggingface"
+os.environ["HF_HOME"] = "/root/.cache/huggingface"
 os.environ["CUDA_LAUNCH_BLOCKING"] = "0"
 os.environ["OMP_NUM_THREADS"] = "8"
 
@@ -284,7 +278,7 @@ ORG_NAME = "TestOrganizationPleaseIgnore"
 MODEL_ID = os.getenv("REPO_ID") or random.choice(
     list(list_models(author=ORG_NAME, filter='diffusers:WanImageToVideoPipeline'))
 ).modelId
-CACHE_DIR = _HF_CACHE
+CACHE_DIR = os.path.expanduser("~/.cache/huggingface/")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 LORA_MODELS = [
@@ -327,20 +321,12 @@ SCHEDULER_MAP = {
     "DPMSolverSinglestep": DPMSolverSinglestepScheduler,
 }
 
-try:
-    pipe = WanImageToVideoPipeline.from_pretrained(
-        MODEL_ID,
-        torch_dtype=torch.bfloat16,
-        cache_dir=CACHE_DIR,
-        local_files_only=True,
-    )
-except Exception:
-    pipe = WanImageToVideoPipeline.from_pretrained(
-        MODEL_ID,
-        torch_dtype=torch.bfloat16,
-        cache_dir=CACHE_DIR,
-        local_files_only=False,
-    )
+pipe = WanImageToVideoPipeline.from_pretrained(
+    MODEL_ID,
+    torch_dtype=torch.bfloat16,
+    cache_dir=CACHE_DIR,
+    local_files_only=False,
+)
 
 # Create 1 pipeline instance for single GPU
 pipes = []
@@ -695,22 +681,6 @@ def generate_video(
         progress,
     )
     print(f"GPU complete: {task_n}")
-
-    # Cleanup old tmp files, keeping the new video and current input images
-    keep_files = {video_path}
-    for img in [input_image, last_image]:
-        if hasattr(img, 'filename') and img.filename:
-            keep_files.add(img.filename)
-
-    for search_dir in [_TMP_DIR, os.path.join(_TMP_DIR, "gradio")]:
-        if not os.path.isdir(search_dir):
-            continue
-        for entry in os.scandir(search_dir):
-            if entry.is_file() and entry.path not in keep_files:
-                try:
-                    os.remove(entry.path)
-                except Exception:
-                    pass
 
     return (video_path if video_component else None), video_path, current_seed
 
