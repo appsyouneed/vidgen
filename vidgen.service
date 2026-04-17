@@ -8,11 +8,12 @@ User=root
 WorkingDirectory=/root/vidgen
 Environment="PYTHONUNBUFFERED=1"
 Environment="HF_HOME=/root/.cache/huggingface"
-Environment="TRANSFORMERS_CACHE=/root/.cache/huggingface"
 Environment="PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
-Environment="TOKENIZERS_PARALLELISM=true"
-Environment="CUDA_LAUNCH_BLOCKING=0"
-Environment="OMP_NUM_THREADS=8"
+Environment="TMPDIR=/root/vidgen/tmp"
+Environment="TEMP=/root/vidgen/tmp"
+Environment="TMP=/root/vidgen/tmp"
+ExecStartPre=/bin/mkdir -p /root/vidgen/tmp
+ExecStartPre=/bin/chmod 1777 /root/vidgen/tmp
 ExecStart=/usr/bin/python3 /root/vidgen/app.py
 Restart=always
 RestartSec=10
