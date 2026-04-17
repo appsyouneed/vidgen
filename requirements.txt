@@ -1,13 +1,28 @@
+# Core dependencies - install first
+torch
+torchvision
+torchao==0.11.0
+
+# Diffusers with Wan support
 git+https://github.com/linoytsaban/diffusers.git@wan22-loras
 
-gradio>=4.0.0
-transformers>=4.45.0,<4.50.0
+# Transformers and model dependencies
+transformers<5
 accelerate
 safetensors
 sentencepiece
 peft
-ftfy
-imageio-ffmpeg
+
+# Image/Video processing
 opencv-python
-torchao==0.11.0
+imageio
+imageio-ffmpeg
+Pillow
+numpy
+
+# UI and utilities
+gradio
 huggingface_hub
+ftfy
+tqdm
+typing-extensions
