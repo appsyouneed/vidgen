@@ -10,13 +10,104 @@ import time
 import gc
 import uuid
 import threading
+import getpass
+import hashlib
+import json
+import secrets
 from tqdm import tqdm
 
-# Set temp directory before torch imports
-os.makedirs("/root/vidgen/tmp", exist_ok=True)
-os.environ["TMPDIR"] = "/root/vidgen/tmp"
-os.environ["TEMP"] = "/root/vidgen/tmp"
-os.environ["TMP"] = "/root/vidgen/tmp"
+# Use RAM-backed tmpfs so no temp files ever touch disk
+_RAM_TMP = "/dev/shm/vidgen_tmp"
+os.makedirs(_RAM_TMP, exist_ok=True)
+os.chmod(_RAM_TMP, 0o700)
+os.environ["TMPDIR"] = _RAM_TMP
+os.environ["TEMP"] = _RAM_TMP
+os.environ["TMP"] = _RAM_TMP
+tempfile.tempdir = _RAM_TMP
+
+# ---------------------------------------------------------------------------
+# PASSWORD SETUP & SESSION ENCRYPTION
+# ---------------------------------------------------------------------------
+import bcrypt
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+_CRED_FILE = "/root/vidgen/.credentials"  # stores only bcrypt hash, never plaintext
+
+def _setup_password():
+    """First-run: prompt to set password. Subsequent runs: load hash."""
+    if os.path.exists(_CRED_FILE):
+        with open(_CRED_FILE, "rb") as f:
+            return f.read().strip()
+    # First run
+    print("=== VIDGEN FIRST-RUN SETUP ===")
+    while True:
+        pw = getpass.getpass("Set a new password: ")
+        pw2 = getpass.getpass("Confirm password: ")
+        if pw != pw2:
+            print("Passwords do not match, try again.")
+            continue
+        if len(pw) < 8:
+            print("Password must be at least 8 characters.")
+            continue
+        break
+    hashed = bcrypt.hashpw(pw.encode(), bcrypt.gensalt(rounds=12))
+    # Write hash with restricted permissions
+    fd = os.open(_CRED_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(hashed)
+    print("Password set. Starting server...")
+    return hashed
+
+def _verify_password(plain: str, hashed: bytes) -> bool:
+    return bcrypt.checkpw(plain.encode(), hashed)
+
+def _derive_session_key(plain: str) -> bytes:
+    """Derive a 32-byte AES key from the password using PBKDF2. Used to encrypt video in RAM."""
+    return hashlib.pbkdf2_hmac("sha256", plain.encode(), b"vidgen-session-salt", 200_000)
+
+def _encrypt_bytes(data: bytes, key: bytes) -> bytes:
+    nonce = secrets.token_bytes(12)
+    return nonce + AESGCM(key).encrypt(nonce, data, None)
+
+def _decrypt_bytes(data: bytes, key: bytes) -> bytes:
+    return AESGCM(key).decrypt(data[:12], data[12:], None)
+
+# Run setup / load hash at import time (before server starts)
+_pw_hash = _setup_password()
+
+# Session key is derived once at startup from the password entered interactively.
+# It lives only in process memory — never written anywhere.
+_session_key: bytes = None  # set after password confirmed below
+
+def _init_session_key():
+    global _session_key
+    pw = getpass.getpass("Enter your password to start the server: ")
+    if not _verify_password(pw, _pw_hash):
+        print("Wrong password. Exiting.")
+        sys.exit(1)
+    _session_key = _derive_session_key(pw)
+    del pw
+
+_init_session_key()
+
+# In-memory store for the current video (encrypted bytes, never a plain file path held long-term)
+_current_video_lock = threading.Lock()
+_current_video_enc: bytes = None   # encrypted mp4 bytes in RAM
+_current_video_path: str = None    # temp path in /dev/shm, wiped on next generation
+
+def _wipe_current_video():
+    global _current_video_enc, _current_video_path
+    with _current_video_lock:
+        if _current_video_path and os.path.exists(_current_video_path):
+            # Overwrite with zeros before unlinking
+            size = os.path.getsize(_current_video_path)
+            with open(_current_video_path, "r+b") as f:
+                f.write(b'\x00' * size)
+            os.unlink(_current_video_path)
+        _current_video_enc = None
+        _current_video_path = None
+
+# ---------------------------------------------------------------------------
 
 import cv2
 import numpy as np
@@ -115,7 +206,24 @@ def extract_frame(video_path, timestamp):
 # --- END FRAME EXTRACTION LOGIC ---
 
 
-def clear_vram():
+def _scrub_str(s: str) -> None:
+    """Overwrite a string's internal buffer with zeros. Best-effort — CPython may have copies."""
+    import ctypes
+    try:
+        # PyObject_HEAD is 16 bytes on 64-bit; ob_val starts at offset 48 for str
+        # Simpler: overwrite via id-based pointer to the raw ob_hash+ob_val area
+        buf = (ctypes.c_char * len(s)).from_address(id(s) + 48)
+        ctypes.memset(buf, 0, len(s))
+    except Exception:
+        pass
+
+def _scrub_array(arr) -> None:
+    """Zero a numpy array's data buffer in-place."""
+    try:
+        arr.fill(0)
+    except Exception:
+        pass
+
     gc.collect()
     torch.cuda.empty_cache()
     if torch.cuda.is_available():
@@ -556,10 +664,18 @@ def run_inference(
         guidance_scale_2=float(guidance_scale_2),
         num_inference_steps=int(steps),
         generator=generator,
-        output_type="np" 
+        output_type="np",
     )
     print("gen time passed:", time.time() - start)
-    
+
+    # Scrub prompt and image data from CPU memory now that inference is done
+    _scrub_str(prompt)
+    _scrub_str(negative_prompt)
+    _scrub_array(np.array(resized_image))  # PIL → numpy → zero
+    if processed_last_image is not None:
+        _scrub_array(np.array(processed_last_image))
+    clear_vram()  # release GPU tensors back to allocator
+
     raw_frames_np = result.frames[0]  # Returns (T, H, W, C) float32
     current_pipe.scheduler = original_schedulers[pipe_id]
 
@@ -574,9 +690,16 @@ def run_inference(
     else:
         final_frames = list(raw_frames_np)
 
+    # Scrub raw frames now that final_frames is built
+    _scrub_array(raw_frames_np)
+    del raw_frames_np, result
+
     final_fps = FIXED_FPS * int(frame_factor)
 
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmpfile:
+    # Wipe previous video from RAM before writing new one
+    _wipe_current_video()
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False, dir=_RAM_TMP) as tmpfile:
         video_path = tmpfile.name
 
     start = time.time()
@@ -585,6 +708,28 @@ def run_inference(
         export_to_video(final_frames, video_path, fps=final_fps, quality=quality)
         pbar.update(1)
     print(f"Export time passed, {final_fps} FPS:", time.time() - start)
+
+    # Scrub frame buffers now that video is written
+    for f in final_frames:
+        _scrub_array(f)
+    del final_frames
+
+    # Read plaintext, encrypt into RAM, zero-wipe the file, then write back for Gradio to serve
+    global _current_video_enc, _current_video_path
+    with open(video_path, "rb") as f:
+        raw = f.read()
+    enc = _encrypt_bytes(raw, _session_key)
+    with _current_video_lock:
+        _current_video_enc = enc
+        _current_video_path = video_path
+    # Zero-wipe plaintext immediately
+    with open(video_path, "r+b") as f:
+        f.write(b'\x00' * len(raw))
+    # Write decrypted back so Gradio can serve it this session
+    plain = _decrypt_bytes(enc, _session_key)
+    with open(video_path, "wb") as f:
+        f.write(plain)
+    del raw, plain
 
     return video_path, task_name
 
@@ -681,6 +826,12 @@ def generate_video(
         progress,
     )
     print(f"GPU complete: {task_n}")
+
+    # Scrub resized copies of input images from CPU memory
+    _scrub_array(np.array(resized_image))
+    if processed_last_image is not None:
+        _scrub_array(np.array(processed_last_image))
+    _scrub_str(prompt)
 
     return (video_path if video_component else None), video_path, current_seed
 
@@ -783,10 +934,22 @@ with gr.Blocks(delete_cache=(3600, 10800)) as demo:
     )
 
 if __name__ == "__main__":
+    # Suppress all stdout/stderr logging so prompts never appear in journald
+    import logging
+    logging.disable(logging.CRITICAL)
+    sys.stdout = open(os.devnull, 'w')
+    sys.stderr = open(os.devnull, 'w')
+
+    def _gradio_auth(username: str, password: str) -> bool:
+        # Username is ignored — single-user app, only password matters
+        return _verify_password(password, _pw_hash)
+
     demo.queue(max_size=30, default_concurrency_limit=1).launch(
-        server_name="0.0.0.0",
+        server_name="0.0.0.0",   # accessible from other devices
         server_port=7860,
         css=CSS,
-        show_error=True,
+        show_error=False,
         max_threads=20,
+        auth=_gradio_auth,
+        analytics_enabled=False,
     )
