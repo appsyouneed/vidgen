@@ -9,18 +9,16 @@ WorkingDirectory=/root/vidgen
 Environment="PYTHONUNBUFFERED=1"
 Environment="HF_HOME=/root/.cache/huggingface"
 Environment="PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
-Environment="TMPDIR=/dev/shm/vidgen_tmp"
-Environment="TEMP=/dev/shm/vidgen_tmp"
-Environment="TMP=/dev/shm/vidgen_tmp"
-ExecStartPre=/bin/mkdir -p /dev/shm/vidgen_tmp
-ExecStartPre=/bin/chmod 700 /dev/shm/vidgen_tmp
+Environment="TMPDIR=/root/vidgen/tmp"
+Environment="TEMP=/root/vidgen/tmp"
+Environment="TMP=/root/vidgen/tmp"
+ExecStartPre=/bin/mkdir -p /root/vidgen/tmp
+ExecStartPre=/bin/chmod 1777 /root/vidgen/tmp
 ExecStart=/usr/bin/python3 /root/vidgen/app.py
-Restart=on-failure
+Restart=always
 RestartSec=10
-StandardInput=tty
-TTYPath=/dev/tty1
-StandardOutput=null
-StandardError=null
+StandardOutput=append:/root/vidgen/vidgen.log
+StandardError=append:/root/vidgen/vidgen.log
 
 [Install]
 WantedBy=multi-user.target
