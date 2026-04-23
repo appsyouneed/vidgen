@@ -3,6 +3,12 @@ set -e
 
 echo "=== Wan 2.2 14B VPS Setup ==="
 
+UBUNTU_VER=$(lsb_release -rs)
+if (( $(echo "$UBUNTU_VER < 24" | bc -l) )); then
+    echo "Ubuntu $UBUNTU_VER detected: upgrading pip first..."
+    pip3 install --upgrade pip
+fi
+
 echo "Creating temp directory..."
 mkdir -p /root/vidgen/tmp
 chmod 1777 /root/vidgen/tmp
