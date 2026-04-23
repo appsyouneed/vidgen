@@ -338,38 +338,38 @@ print("Creating 1 pipeline instance")
 gpu_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
 print(f"Detected GPU VRAM: {gpu_vram_gb:.1f} GB")
 
-# Apply quantization BEFORE moving to GPU to avoid OOM
-print("Applying quantization on CPU...")
-quantize_(pipe.text_encoder, Int8WeightOnlyConfig())
-quantize_(pipe.transformer, Float8DynamicActivationFloat8WeightConfig())
-quantize_(pipe.transformer_2, Float8DynamicActivationFloat8WeightConfig())
-
 # Enable VAE optimizations for all GPUs to reduce memory
 print("Enabling VAE slicing and tiling for memory optimization...")
 pipe.vae.enable_slicing()
 pipe.vae.enable_tiling()
 
-# Enable CPU offloading for 32GB or less
-if gpu_vram_gb <= 32:
+if gpu_vram_gb >= 80:
+    # High VRAM: no quantization, no offloading — full quality on GPU
+    print("High VRAM detected: loading full precision model directly to GPU...")
+    pipe.text_encoder = pipe.text_encoder.to('cuda')
+    pipe.transformer = pipe.transformer.to('cuda')
+    pipe.transformer_2 = pipe.transformer_2.to('cuda')
+    pipe.vae = pipe.vae.to('cuda')
+elif gpu_vram_gb <= 32:
+    print("Applying quantization on CPU...")
+    quantize_(pipe.text_encoder, Int8WeightOnlyConfig())
+    quantize_(pipe.transformer, Float8DynamicActivationFloat8WeightConfig())
+    quantize_(pipe.transformer_2, Float8DynamicActivationFloat8WeightConfig())
     print("Enabling model CPU offloading for memory optimization...")
     pipe.enable_model_cpu_offload()
     print("Model loaded with CPU offloading enabled")
 else:
-    # Move components to GPU one at a time for larger GPUs
+    print("Applying quantization on CPU...")
+    quantize_(pipe.text_encoder, Int8WeightOnlyConfig())
+    quantize_(pipe.transformer, Float8DynamicActivationFloat8WeightConfig())
+    quantize_(pipe.transformer_2, Float8DynamicActivationFloat8WeightConfig())
     print("Moving quantized model to GPU...")
-    print("  - Moving text_encoder...")
     pipe.text_encoder = pipe.text_encoder.to('cuda')
     clear_vram()
-    
-    print("  - Moving transformer...")
     pipe.transformer = pipe.transformer.to('cuda')
     clear_vram()
-    
-    print("  - Moving transformer_2...")
     pipe.transformer_2 = pipe.transformer_2.to('cuda')
     clear_vram()
-    
-    print("  - Moving VAE...")
     pipe.vae = pipe.vae.to('cuda')
     clear_vram()
 
