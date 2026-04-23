@@ -6,7 +6,7 @@ echo "=== Wan 2.2 14B VPS Setup ==="
 UBUNTU_VER=$(lsb_release -rs)
 if (( $(echo "$UBUNTU_VER < 24" | bc -l) )); then
     echo "Ubuntu $UBUNTU_VER detected: upgrading pip first..."
-    pip3 install --upgrade pip
+    pip install --upgrade pip
 fi
 
 echo "Creating temp directory..."
@@ -15,6 +15,10 @@ chmod 1777 /root/vidgen/tmp
 
 echo "Creating cache directory..."
 mkdir -p /root/.cache/huggingface
+
+echo "Creating Python virtual environment..."
+python3 -m venv /root/vidgen/venv
+source /root/vidgen/venv/bin/activate
 
 echo "Installing system dependencies..."
 apt-get update && apt-get install -y python3-pip ffmpeg wget unzip git
@@ -47,13 +51,13 @@ else
 fi
 
 echo "Installing PyTorch with CUDA 12.4 support..."
-pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu124 --break-system-packages --ignore-installed
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124 --ignore-installed
 
 echo "Installing Python dependencies..."
-pip3 install -r requirements.txt --break-system-packages --ignore-installed
+pip install -r requirements.txt --ignore-installed
 
 echo "Fixing pyOpenSSL compatibility..."
-python3 -c "from OpenSSL import SSL" 2>/dev/null || pip3 install --upgrade pyopenssl --break-system-packages
+python3 -c "from OpenSSL import SSL" 2>/dev/null || pip install --upgrade pyopenssl
 
 echo "Setting up RIFE interpolation model..."
 if [ ! -d "train_log/model" ] || [ ! -f "train_log/RIFE_HDv3.py" ]; then
@@ -91,6 +95,9 @@ echo "  systemctl start vidgen   - Start vidgen"
 echo "  systemctl stop vidgen    - Stop vidgen"
 echo "  systemctl status vidgen  - Check status"
 echo "  systemctl restart vidgen - Restart vidgen"
+echo ""
+echo "View live output:"
+echo "  tail -f /root/vidgen/vidgen.log"
 echo ""
 echo "To run manually: python3 app.py"
 echo "The app will be accessible at: http://0.0.0.0:7860"

@@ -14,7 +14,7 @@ Environment="TEMP=/root/vidgen/tmp"
 Environment="TMP=/root/vidgen/tmp"
 ExecStartPre=/bin/mkdir -p /root/vidgen/tmp
 ExecStartPre=/bin/chmod 1777 /root/vidgen/tmp
-ExecStart=/usr/bin/python3 /root/vidgen/app.py
+ExecStart=/root/vidgen/venv/bin/python /root/vidgen/app.py
 Restart=always
 RestartSec=10
 StandardOutput=append:/root/vidgen/vidgen.log
