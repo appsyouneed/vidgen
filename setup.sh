@@ -9,6 +9,9 @@ if (( $(echo "$UBUNTU_VER < 24" | bc -l) )); then
     pip install --upgrade pip
 fi
 
+echo "Installing system dependencies..."
+apt-get update && apt-get install -y python3-pip python3-venv python3.10-venv ffmpeg wget unzip git
+
 echo "Creating temp directory..."
 mkdir -p /root/vidgen/tmp
 chmod 1777 /root/vidgen/tmp
@@ -17,11 +20,9 @@ echo "Creating cache directory..."
 mkdir -p /root/.cache/huggingface
 
 echo "Creating Python virtual environment..."
+rm -rf /root/vidgen/venv
 python3 -m venv /root/vidgen/venv
 source /root/vidgen/venv/bin/activate
-
-echo "Installing system dependencies..."
-apt-get update && apt-get install -y python3-pip ffmpeg wget unzip git
 
 # --- CUDA 12.4 Toolkit (if not already installed) ---
 if ! command -v nvcc &> /dev/null; then
