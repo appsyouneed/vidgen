@@ -1,5 +1,9 @@
 #!/bin/bash
 
+if [ "$EUID" -ne 0 ]; then
+    exec sudo bash "$0" "$@"
+fi
+
 echo "=== Stopping vidgen service ==="
 systemctl stop vidgen 2>/dev/null || true
 
