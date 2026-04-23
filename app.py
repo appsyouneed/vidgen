@@ -343,7 +343,7 @@ print("Enabling VAE slicing and tiling for memory optimization...")
 pipe.vae.enable_slicing()
 pipe.vae.enable_tiling()
 
-if gpu_vram_gb >= 80:
+if gpu_vram_gb >= 70:
     # High VRAM: no quantization, no offloading — full quality on GPU
     print("High VRAM detected: loading full precision model directly to GPU...")
     pipe.text_encoder = pipe.text_encoder.to('cuda')
