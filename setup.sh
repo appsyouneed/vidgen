@@ -12,13 +12,14 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 UBUNTU_VER=$(lsb_release -rs)
-if (( $(echo "$UBUNTU_VER < 24" | bc -l) )); then
-    echo "Ubuntu $UBUNTU_VER detected: upgrading pip first..."
-    pip3 install --upgrade pip
-fi
 
 echo "Installing system dependencies..."
-apt-get update && apt-get install -y python3-pip python3-venv python3.10-venv ffmpeg wget unzip git
+PKGS="python3-pip python3-venv ffmpeg wget unzip git"
+if (( $(echo "$UBUNTU_VER < 24" | bc -l) )); then
+    echo "Ubuntu $UBUNTU_VER detected: adding python3.10-venv..."
+    PKGS="$PKGS python3.10-venv"
+fi
+apt-get update && apt-get install -y $PKGS
 
 echo "Creating temp directory..."
 mkdir -p "$SCRIPT_DIR/tmp"
