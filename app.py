@@ -321,12 +321,22 @@ SCHEDULER_MAP = {
     "DPMSolverSinglestep": DPMSolverSinglestepScheduler,
 }
 
-pipe = WanImageToVideoPipeline.from_pretrained(
-    MODEL_ID,
-    torch_dtype=torch.bfloat16,
-    cache_dir=CACHE_DIR,
-    local_files_only=False,
-)
+try:
+    pipe = WanImageToVideoPipeline.from_pretrained(
+        MODEL_ID,
+        torch_dtype=torch.bfloat16,
+        cache_dir=CACHE_DIR,
+        local_files_only=True,
+    )
+    print("Loaded model from local cache.")
+except Exception:
+    print("Local cache miss, downloading model...")
+    pipe = WanImageToVideoPipeline.from_pretrained(
+        MODEL_ID,
+        torch_dtype=torch.bfloat16,
+        cache_dir=CACHE_DIR,
+        local_files_only=False,
+    )
 
 # Create 1 pipeline instance for single GPU
 pipes = []
@@ -699,7 +709,7 @@ CSS = """
 """
 
 
-with gr.Blocks(delete_cache=(3600, 10800)) as demo:
+with gr.Blocks() as demo:
     gr.Markdown(model_title())
     gr.Markdown("#### ℹ️ **A Note on Performance:** This version prioritizes a straightforward setup over maximum speed, so performance may vary.")
     gr.Markdown("Run Wan 2.2 in just 4-8 steps, fp8 quantization & AoT compilation - compatible with 🧨 diffusers and ZeroGPU")
