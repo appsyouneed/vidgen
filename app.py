@@ -229,16 +229,35 @@ SCHEDULER_MAP = {
     "DPMSolverSinglestep": DPMSolverSinglestepScheduler,
 }
 
-try:
+def _find_cached_wan_model():
+    """Scan cache for any already-downloaded WanImageToVideoPipeline model snapshot."""
+    hub_dir = os.path.join(CACHE_DIR, "hub")
+    if not os.path.isdir(hub_dir):
+        return None
+    for entry in os.listdir(hub_dir):
+        if not entry.startswith("models--"):
+            continue
+        snapshots_dir = os.path.join(hub_dir, entry, "snapshots")
+        if not os.path.isdir(snapshots_dir):
+            continue
+        for snap in os.listdir(snapshots_dir):
+            snap_path = os.path.join(snapshots_dir, snap)
+            if os.path.isfile(os.path.join(snap_path, "model_index.json")):
+                return snap_path
+    return None
+
+# Try loading from cache first — check for any cached snapshot before downloading
+_cached_path = _find_cached_wan_model()
+if _cached_path:
+    print(f"Found cached model at: {_cached_path}")
     pipe = WanImageToVideoPipeline.from_pretrained(
-        MODEL_ID,
+        _cached_path,
         torch_dtype=torch.bfloat16,
-        cache_dir=CACHE_DIR,
         local_files_only=True,
     )
     print("Loaded model from local cache.")
-except Exception:
-    print("Local cache miss, downloading model...")
+else:
+    print("No local cache found, downloading model...")
     pipe = WanImageToVideoPipeline.from_pretrained(
         MODEL_ID,
         torch_dtype=torch.bfloat16,
