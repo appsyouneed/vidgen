@@ -38,17 +38,14 @@ else
     echo "CUDA already installed: $(nvcc --version | head -1)"
 fi
 
-echo "Upgrading pip..."
-python3 -m pip install --upgrade pip
-
 echo "Installing PyTorch with CUDA 12.4 support..."
-pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu124 --break-system-packages --ignore-installed
 
 echo "Installing Python dependencies..."
-pip3 install -r "$SCRIPT_DIR/requirements.txt"
+pip3 install -r "$SCRIPT_DIR/requirements.txt" --break-system-packages --ignore-installed
 
 echo "Fixing pyOpenSSL compatibility..."
-python3 -c "from OpenSSL import SSL" 2>/dev/null || pip3 install --upgrade pyopenssl
+python3 -c "from OpenSSL import SSL" 2>/dev/null || pip3 install pyopenssl --break-system-packages --ignore-installed
 
 echo "Setting up RIFE interpolation model..."
 if [ ! -d "$SCRIPT_DIR/train_log/model" ] || [ ! -f "$SCRIPT_DIR/train_log/RIFE_HDv3.py" ]; then
