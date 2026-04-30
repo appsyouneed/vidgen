@@ -1,7 +1,6 @@
-# Core dependencies - install first
+# Core dependencies
 torch
 torchvision
-torchao==0.11.0
 
 # Diffusers with Wan support
 git+https://github.com/linoytsaban/diffusers.git@wan22-loras

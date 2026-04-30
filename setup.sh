@@ -3,23 +3,14 @@ set -e
 
 echo "=== Wan 2.2 14B VPS Setup ==="
 
-# Detect script directory (works regardless of where it's run from)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Auto sudo if not root
 if [ "$EUID" -ne 0 ]; then
     exec sudo bash "$0" "$@"
 fi
 
-UBUNTU_VER=$(lsb_release -rs)
-
 echo "Installing system dependencies..."
-PKGS="python3-pip python3-venv ffmpeg wget unzip git"
-if (( $(echo "$UBUNTU_VER < 24" | bc -l) )); then
-    echo "Ubuntu $UBUNTU_VER detected: adding python3.10-venv..."
-    PKGS="$PKGS python3.10-venv"
-fi
-apt-get update && apt-get install -y $PKGS
+apt-get update && apt-get install -y python3-pip ffmpeg wget unzip git
 
 echo "Creating temp directory..."
 mkdir -p "$SCRIPT_DIR/tmp"
@@ -27,11 +18,6 @@ chmod 1777 "$SCRIPT_DIR/tmp"
 
 echo "Creating cache directory..."
 mkdir -p /root/.cache/huggingface
-
-echo "Creating Python virtual environment..."
-rm -rf "$SCRIPT_DIR/venv"
-python3 -m venv "$SCRIPT_DIR/venv"
-source "$SCRIPT_DIR/venv/bin/activate"
 
 # --- CUDA 12.4 Toolkit (if not already installed) ---
 if ! command -v nvcc &> /dev/null; then
@@ -52,22 +38,17 @@ else
     echo "CUDA already installed: $(nvcc --version | head -1)"
 fi
 
-# Upgrade pip only if needed
-if python3 -m pip install --upgrade pip --dry-run 2>&1 | grep -q "Would install"; then
-    echo "Upgrading pip..."
-    python3 -m pip install --upgrade pip
-else
-    echo "pip already up to date, skipping."
-fi
+echo "Upgrading pip..."
+python3 -m pip install --upgrade pip
 
 echo "Installing PyTorch with CUDA 12.4 support..."
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124 --ignore-installed
+pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 
 echo "Installing Python dependencies..."
-pip install -r "$SCRIPT_DIR/requirements.txt" --ignore-installed
+pip3 install -r "$SCRIPT_DIR/requirements.txt"
 
 echo "Fixing pyOpenSSL compatibility..."
-python3 -c "from OpenSSL import SSL" 2>/dev/null || pip install --upgrade pyopenssl
+python3 -c "from OpenSSL import SSL" 2>/dev/null || pip3 install --upgrade pyopenssl
 
 echo "Setting up RIFE interpolation model..."
 if [ ! -d "$SCRIPT_DIR/train_log/model" ] || [ ! -f "$SCRIPT_DIR/train_log/RIFE_HDv3.py" ]; then
@@ -83,9 +64,7 @@ if [ ! -d "$SCRIPT_DIR/train_log/model" ] || [ ! -f "$SCRIPT_DIR/train_log/RIFE_
     wget -q -P "$SCRIPT_DIR" https://huggingface.co/r3gm/RIFE/resolve/main/RIFEv4.26_0921.zip
     unzip -o "$SCRIPT_DIR/RIFEv4.26_0921.zip" -d "$SCRIPT_DIR"
 
-    echo "Cleaning up..."
     rm -rf /tmp/rife "$SCRIPT_DIR/__MACOSX"
-
     echo "RIFE model installed successfully"
 else
     echo "RIFE model already installed, skipping..."
@@ -95,7 +74,6 @@ echo "=== Setup Complete ==="
 echo ""
 echo "Setting up systemd service..."
 
-# Write service file dynamically with correct paths
 cat > /etc/systemd/system/vidgen.service <<EOF
 [Unit]
 Description=Vidgen Video Generation Application
@@ -113,7 +91,7 @@ Environment="TEMP=$SCRIPT_DIR/tmp"
 Environment="TMP=$SCRIPT_DIR/tmp"
 ExecStartPre=/bin/mkdir -p $SCRIPT_DIR/tmp
 ExecStartPre=/bin/chmod 1777 $SCRIPT_DIR/tmp
-ExecStart=$SCRIPT_DIR/venv/bin/python $SCRIPT_DIR/app.py
+ExecStart=/usr/bin/python3 $SCRIPT_DIR/app.py
 Restart=always
 RestartSec=10
 StandardOutput=append:$SCRIPT_DIR/vidgen.log
