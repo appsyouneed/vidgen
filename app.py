@@ -198,11 +198,28 @@ def interpolate_bits(frames_np, multiplier=2, scale=1.0):
 # WAN
 
 ORG_NAME = "TestOrganizationPleaseIgnore"
-MODEL_ID = os.getenv("REPO_ID") or random.choice(
-    list(list_models(author=ORG_NAME, filter='diffusers:WanImageToVideoPipeline'))
-).modelId
 CACHE_DIR = os.path.expanduser("~/.cache/huggingface/")
 os.makedirs(CACHE_DIR, exist_ok=True)
+
+def _get_model_id():
+    """Return MODEL_ID: env var, or first already-cached model, or random from HF."""
+    if os.getenv("REPO_ID"):
+        return os.getenv("REPO_ID")
+    # Find any already-cached model matching this org to avoid re-downloading
+    hub_dir = os.path.join(CACHE_DIR, "hub")
+    if os.path.isdir(hub_dir):
+        prefix = f"models--{ORG_NAME.replace('/', '--')}--"
+        for entry in os.listdir(hub_dir):
+            if entry.startswith(prefix):
+                # Convert cache folder name back to repo id
+                repo_id = entry[len("models--"):].replace("--", "/", 1)
+                print(f"Using cached model: {repo_id}")
+                return repo_id
+    return random.choice(
+        list(list_models(author=ORG_NAME, filter='diffusers:WanImageToVideoPipeline'))
+    ).modelId
+
+MODEL_ID = _get_model_id()
 
 LORA_MODELS = []
 
@@ -229,40 +246,18 @@ SCHEDULER_MAP = {
     "DPMSolverSinglestep": DPMSolverSinglestepScheduler,
 }
 
-def _find_cached_wan_model():
-    """Scan cache for any already-downloaded WanImageToVideoPipeline model snapshot."""
-    hub_dir = os.path.join(CACHE_DIR, "hub")
-    if not os.path.isdir(hub_dir):
-        return None
-    for entry in os.listdir(hub_dir):
-        if not entry.startswith("models--"):
-            continue
-        snapshots_dir = os.path.join(hub_dir, entry, "snapshots")
-        if not os.path.isdir(snapshots_dir):
-            continue
-        for snap in os.listdir(snapshots_dir):
-            snap_path = os.path.join(snapshots_dir, snap)
-            if os.path.isfile(os.path.join(snap_path, "model_index.json")):
-                return snap_path
-    return None
-
-# Try loading from cache first — check for any cached snapshot before downloading
-_cached_path = _find_cached_wan_model()
-if _cached_path:
-    print(f"Found cached model at: {_cached_path}")
+try:
     pipe = WanImageToVideoPipeline.from_pretrained(
-        _cached_path,
+        MODEL_ID,
         torch_dtype=torch.bfloat16,
         local_files_only=True,
     )
     print("Loaded model from local cache.")
-else:
-    print("No local cache found, downloading model...")
+except Exception:
+    print("Downloading model...")
     pipe = WanImageToVideoPipeline.from_pretrained(
         MODEL_ID,
         torch_dtype=torch.bfloat16,
-        cache_dir=CACHE_DIR,
-        local_files_only=False,
     )
 
 pipes = []
