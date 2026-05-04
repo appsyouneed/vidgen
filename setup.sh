@@ -52,11 +52,14 @@ if python3 -c "import torch; torch.cuda.is_available()" 2>/dev/null; then
     echo "PyTorch with CUDA already installed and working, skipping..."
 else
     echo "Installing PyTorch with $TORCH_CUDA support..."
-    pip3 install torch torchvision --index-url https://download.pytorch.org/whl/$TORCH_CUDA --break-system-packages
+    pip3 install torch torchvision --index-url https://download.pytorch.org/whl/$TORCH_CUDA --break-system-packages --no-cache-dir
 fi
 
 echo "Installing Python dependencies..."
-pip3 install -r "$SCRIPT_DIR/requirements.txt" --break-system-packages
+pip3 install -r "$SCRIPT_DIR/requirements.txt" --break-system-packages --ignore-installed typing-extensions --no-cache-dir
+
+echo "Ensuring critical packages are correctly installed..."
+pip3 install Pillow "transformers<5" --break-system-packages --no-cache-dir --force-reinstall
 
 echo "Fixing pyOpenSSL compatibility..."
 python3 -c "from OpenSSL import SSL" 2>/dev/null || pip3 install pyopenssl --break-system-packages
