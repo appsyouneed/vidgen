@@ -126,6 +126,8 @@ def get_assigned_pipeline():
 rife_model = Model()
 rife_model.load_model("train_log", -1)
 rife_model.eval()
+rife_model.device()
+rife_model.flownet = rife_model.flownet.half()
 
 
 @torch.no_grad()
@@ -269,6 +271,8 @@ pipe.text_encoder = pipe.text_encoder.to('cuda')
 pipe.transformer = pipe.transformer.to('cuda')
 pipe.transformer_2 = pipe.transformer_2.to('cuda')
 pipe.vae = pipe.vae.to('cuda')
+pipe.vae.enable_tiling()
+pipe.vae.enable_slicing()
 
 try:
     gpu_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
