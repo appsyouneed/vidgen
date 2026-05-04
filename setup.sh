@@ -37,12 +37,9 @@ if [ -n "$CUDA_VERSION" ]; then
     echo "Detected CUDA $CUDA_VERSION"
 fi
 
-if python3 -c "import torch; print('PyTorch version:', torch.__version__); assert torch.cuda.is_available(), 'CUDA not available'" 2>/dev/null; then
-    echo "PyTorch with CUDA already installed and working, skipping..."
-else
-    echo "Installing latest PyTorch with CUDA support..."
-    pip3 install torch torchvision --break-system-packages --no-cache-dir
-fi
+echo "Ensuring PyTorch and torchvision are compatible..."
+pip3 uninstall -y torch torchvision torchaudio --break-system-packages 2>/dev/null || true
+pip3 install torch torchvision --break-system-packages --no-cache-dir
 
 echo "Installing Python dependencies..."
 pip3 install -r "$SCRIPT_DIR/requirements.txt" --break-system-packages --ignore-installed typing-extensions --no-cache-dir
@@ -75,6 +72,22 @@ fi
 
 echo "=== Setup Complete ==="
 echo ""
+
+# Check if running in Docker (no systemd)
+if [ ! -d /run/systemd/system ]; then
+    echo "Docker environment detected - skipping systemd service setup"
+    echo ""
+    echo "To run the app:"
+    echo "  cd $SCRIPT_DIR && python3 app.py"
+    echo ""
+    echo "Or run in background with tmux:"
+    echo "  tmux new -d -s vidgen 'cd $SCRIPT_DIR && python3 app.py'"
+    echo "  tmux attach -t vidgen  # to view"
+    echo ""
+    echo "The app will be accessible at: http://0.0.0.0:7860"
+    exit 0
+fi
+
 echo "Setting up systemd service..."
 
 cat > /etc/systemd/system/vidgen.service <<EOF
