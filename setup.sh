@@ -37,7 +37,7 @@ if [ -n "$CUDA_VERSION" ]; then
     echo "Detected CUDA $CUDA_VERSION"
 fi
 
-if python3 -c "import torch; torch.cuda.is_available()" 2>/dev/null; then
+if python3 -c "import torch; print('PyTorch version:', torch.__version__); assert torch.cuda.is_available(), 'CUDA not available'" 2>/dev/null; then
     echo "PyTorch with CUDA already installed and working, skipping..."
 else
     echo "Installing latest PyTorch with CUDA support..."
