@@ -9,8 +9,14 @@ if [ "$EUID" -ne 0 ]; then
     exec sudo bash "$0" "$@"
 fi
 
+echo "Checking pip installation..."
+if ! command -v pip3 &> /dev/null; then
+    echo "pip3 not found, installing..."
+    apt-get update && apt-get install -y python3-pip
+fi
+
 echo "Installing system dependencies..."
-apt-get update && apt-get install -y python3-pip ffmpeg wget unzip git
+apt-get install -y ffmpeg wget unzip git
 
 echo "Creating temp directory..."
 mkdir -p "$SCRIPT_DIR/tmp"
@@ -19,13 +25,34 @@ chmod 1777 "$SCRIPT_DIR/tmp"
 echo "Creating cache directory..."
 mkdir -p /root/.cache/huggingface
 
-echo "Using existing CUDA 13 installation..."
+echo "Detecting CUDA version..."
+CUDA_VERSION=""
+if [ -f /usr/local/cuda/version.json ]; then
+    CUDA_VERSION=$(grep -oP '"cuda".*?"version".*?"\K[0-9]+\.[0-9]+' /usr/local/cuda/version.json | head -1)
+elif command -v nvcc &> /dev/null; then
+    CUDA_VERSION=$(nvcc --version | grep -oP 'release \K[0-9]+\.[0-9]+')
+fi
+
+if [ -n "$CUDA_VERSION" ]; then
+    echo "Detected CUDA $CUDA_VERSION"
+    CUDA_MAJOR=$(echo $CUDA_VERSION | cut -d. -f1)
+    CUDA_MINOR=$(echo $CUDA_VERSION | cut -d. -f2)
+    
+    if [ "$CUDA_MAJOR" -ge 13 ] || ([ "$CUDA_MAJOR" -eq 12 ] && [ "$CUDA_MINOR" -ge 4 ]); then
+        TORCH_CUDA="cu124"
+    else
+        TORCH_CUDA="cu121"
+    fi
+else
+    echo "CUDA version not detected, defaulting to cu121"
+    TORCH_CUDA="cu121"
+fi
 
 if python3 -c "import torch; torch.cuda.is_available()" 2>/dev/null; then
     echo "PyTorch with CUDA already installed and working, skipping..."
 else
-    echo "Installing PyTorch with CUDA 12.1 support (compatible with CUDA 13)..."
-    pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu121 --break-system-packages
+    echo "Installing PyTorch with $TORCH_CUDA support..."
+    pip3 install torch torchvision --index-url https://download.pytorch.org/whl/$TORCH_CUDA --break-system-packages
 fi
 
 echo "Installing Python dependencies..."
