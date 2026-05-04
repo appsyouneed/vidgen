@@ -21,14 +21,18 @@ mkdir -p /root/.cache/huggingface
 
 echo "Using existing CUDA 13 installation..."
 
-echo "Installing PyTorch with CUDA 12.1 support (compatible with CUDA 13)..."
-pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu121 --break-system-packages --ignore-installed
+if python3 -c "import torch; torch.cuda.is_available()" 2>/dev/null; then
+    echo "PyTorch with CUDA already installed and working, skipping..."
+else
+    echo "Installing PyTorch with CUDA 12.1 support (compatible with CUDA 13)..."
+    pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu121 --break-system-packages
+fi
 
 echo "Installing Python dependencies..."
-pip3 install -r "$SCRIPT_DIR/requirements.txt" --break-system-packages --ignore-installed
+pip3 install -r "$SCRIPT_DIR/requirements.txt" --break-system-packages
 
 echo "Fixing pyOpenSSL compatibility..."
-python3 -c "from OpenSSL import SSL" 2>/dev/null || pip3 install pyopenssl --break-system-packages --ignore-installed
+python3 -c "from OpenSSL import SSL" 2>/dev/null || pip3 install pyopenssl --break-system-packages
 
 echo "Setting up RIFE interpolation model..."
 if [ ! -d "$SCRIPT_DIR/train_log/model" ] || [ ! -f "$SCRIPT_DIR/train_log/RIFE_HDv3.py" ]; then

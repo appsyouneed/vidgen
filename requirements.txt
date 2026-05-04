@@ -1,6 +1,6 @@
-# Core dependencies
-torch
-torchvision
+# Core dependencies (torch/torchvision installed separately in setup.sh)
+# torch
+# torchvision
 
 # Diffusers with Wan support
 git+https://github.com/linoytsaban/diffusers.git@wan22-loras
