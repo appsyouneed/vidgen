@@ -35,24 +35,13 @@ fi
 
 if [ -n "$CUDA_VERSION" ]; then
     echo "Detected CUDA $CUDA_VERSION"
-    CUDA_MAJOR=$(echo $CUDA_VERSION | cut -d. -f1)
-    CUDA_MINOR=$(echo $CUDA_VERSION | cut -d. -f2)
-    
-    if [ "$CUDA_MAJOR" -ge 13 ] || ([ "$CUDA_MAJOR" -eq 12 ] && [ "$CUDA_MINOR" -ge 4 ]); then
-        TORCH_CUDA="cu124"
-    else
-        TORCH_CUDA="cu121"
-    fi
-else
-    echo "CUDA version not detected, defaulting to cu121"
-    TORCH_CUDA="cu121"
 fi
 
 if python3 -c "import torch; torch.cuda.is_available()" 2>/dev/null; then
     echo "PyTorch with CUDA already installed and working, skipping..."
 else
-    echo "Installing PyTorch with $TORCH_CUDA support..."
-    pip3 install torch torchvision --index-url https://download.pytorch.org/whl/$TORCH_CUDA --break-system-packages --no-cache-dir
+    echo "Installing latest PyTorch with CUDA support..."
+    pip3 install torch torchvision --break-system-packages --no-cache-dir
 fi
 
 echo "Installing Python dependencies..."
