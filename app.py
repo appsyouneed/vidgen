@@ -200,28 +200,9 @@ def interpolate_bits(frames_np, multiplier=2, scale=1.0):
 # WAN
 
 ORG_NAME = "TestOrganizationPleaseIgnore"
+MODEL_ID = "TestOrganizationPleaseIgnore/WAMU_v2_WAN2.2_I2V_LIGHTNING"
 CACHE_DIR = os.path.expanduser("~/.cache/huggingface/")
 os.makedirs(CACHE_DIR, exist_ok=True)
-
-def _get_model_id():
-    """Return MODEL_ID: env var, or first already-cached model, or random from HF."""
-    if os.getenv("REPO_ID"):
-        return os.getenv("REPO_ID")
-    # Find any already-cached model matching this org to avoid re-downloading
-    hub_dir = os.path.join(CACHE_DIR, "hub")
-    if os.path.isdir(hub_dir):
-        prefix = f"models--{ORG_NAME.replace('/', '--')}--"
-        for entry in os.listdir(hub_dir):
-            if entry.startswith(prefix):
-                # Convert cache folder name back to repo id
-                repo_id = entry[len("models--"):].replace("--", "/", 1)
-                print(f"Using cached model: {repo_id}")
-                return repo_id
-    return random.choice(
-        list(list_models(author=ORG_NAME, filter='diffusers:WanImageToVideoPipeline'))
-    ).modelId
-
-MODEL_ID = _get_model_id()
 
 LORA_MODELS = []
 
