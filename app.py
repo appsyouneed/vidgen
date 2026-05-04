@@ -263,15 +263,19 @@ except Exception:
 pipes = []
 original_schedulers = []
 
-gpu_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-print(f"Detected GPU VRAM: {gpu_vram_gb:.1f} GB")
-
 # Full precision, full GPU — no quantization, no offloading
 print("Loading full precision model directly to GPU...")
 pipe.text_encoder = pipe.text_encoder.to('cuda')
 pipe.transformer = pipe.transformer.to('cuda')
 pipe.transformer_2 = pipe.transformer_2.to('cuda')
 pipe.vae = pipe.vae.to('cuda')
+
+try:
+    gpu_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+    print(f"Detected GPU VRAM: {gpu_vram_gb:.1f} GB")
+except:
+    print("Could not detect GPU VRAM, continuing anyway...")
+
 print("All model components loaded to GPU.")
 
 pipes.append(pipe)

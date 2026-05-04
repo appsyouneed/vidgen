@@ -19,27 +19,10 @@ chmod 1777 "$SCRIPT_DIR/tmp"
 echo "Creating cache directory..."
 mkdir -p /root/.cache/huggingface
 
-# --- CUDA 12.4 Toolkit (if not already installed) ---
-if ! command -v nvcc &> /dev/null; then
-    echo "CUDA not found. Installing CUDA 12.4 toolkit..."
-    UBUNTU_VERSION=$(lsb_release -rs | tr -d '.')
-    CUDA_DEB="cuda-keyring_1.1-1_all.deb"
-    wget -q "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VERSION}/x86_64/${CUDA_DEB}"
-    dpkg -i "$CUDA_DEB"
-    apt-get update
-    apt-get install -y cuda-toolkit-12-4
-    rm -f "$CUDA_DEB"
-    export PATH=/usr/local/cuda-12.4/bin:$PATH
-    export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:$LD_LIBRARY_PATH
-    echo 'export PATH=/usr/local/cuda-12.4/bin:$PATH' >> /root/.bashrc
-    echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:$LD_LIBRARY_PATH' >> /root/.bashrc
-    echo "CUDA 12.4 installed."
-else
-    echo "CUDA already installed: $(nvcc --version | head -1)"
-fi
+echo "Using existing CUDA 13 installation..."
 
-echo "Installing PyTorch with CUDA 12.4 support..."
-pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu124 --break-system-packages --ignore-installed
+echo "Installing PyTorch with CUDA 12.1 support (compatible with CUDA 13)..."
+pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu121 --break-system-packages --ignore-installed
 
 echo "Installing Python dependencies..."
 pip3 install -r "$SCRIPT_DIR/requirements.txt" --break-system-packages --ignore-installed
