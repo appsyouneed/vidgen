@@ -1,0 +1,17 @@
+[Unit]
+Description=Wan 2.2 14B Video Generation Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/vidgen
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+ExecStart=/usr/bin/python3 app.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

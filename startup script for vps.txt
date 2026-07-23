@@ -1,0 +1,36 @@
+#!/bin/sh
+
+# Set up SSH authorization
+mkdir -p /root/.ssh
+chmod 700 /root/.ssh
+echo "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQCTwUxVtmmtN+f4ld9/mWL037pp2Rg1t8lhr02tilTZRSwrIwUe/odZDLmshQFAy2ijh22Rzy26otBxYd/o4X1q5WtxCzbNEJGDT4BxN7Cba5+9Ocn/gNyUEeaqwi+bvrh+Vc5djGq7nXANoODJWm3NMyavAhNgrJQu7xBWNXXFitbgtU2tVtbSJu9xGPR7IidRdH32iBvs6apBtmJj3rm5Kc5xI9h5eVUVl9It9Pb+n6MXhiDbN0jFCFnbKGpp2DcTEmuHCo3ImWOXH4g4AeIq0coLZyo170dPuj8zdOaJsUnXz0E+gNkLMFkplKWX9Q2RJfZ51TB7WBH0UQtEy8iW4jc5NbjbpZ/v2ieMashdUAXE6OsSDAdsGMJHajaVi3oHdNvld5BgWN0XjNc01wI+l2FHk9iza+aMzIL6Re63Q9c4238CBqqu/E+dJF7deCVHdJ0jjGMM+1HII1MOU2GsUjRZR2HmbXucsMRStDwbXqxxiytL8FhWl8F03x2BRZTS9DXpYuK0OcpsrBbQb5ET1YF5K+lQMMhtGF/FHmEpABKiic/dajP8qLjwRmOGzmG7//HkEhCed0GUDTspictWf/iDrQcjFI9mk4chapma87FvQsu1fRiJ4BpIdnqgdydUrV8B/DYYgMQZfs1ALE7sFLcCDiFpFK1E0Kqgv2I43Q== root@localhost" > /root/.ssh/authorized_keys
+chmod 600 /root/.ssh/authorized_keys
+
+# Update system packages
+apt-get update
+
+# Install essential packages
+apt-get install -y git python3 python3-pip python3-venv curl wget unzip
+
+# Install Docker (useful for containerized deployments)
+curl -fsSL https://get.docker.com -o get-docker.sh
+sh get-docker.sh
+
+# Create working directory for vidgen
+mkdir -p /opt/vidgen
+cd /opt/vidgen
+
+# Set up Python virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install common ML/AI packages that vidgen might need
+pip install --upgrade pip
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+pip install transformers accelerate diffusers
+
+# Enable SSH service
+systemctl enable ssh
+systemctl start ssh
+
+echo "GPU VM setup complete. Ready for vidgen deployment."

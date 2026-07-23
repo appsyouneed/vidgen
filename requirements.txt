@@ -1,0 +1,38 @@
+# Core dependencies (torch/torchvision installed separately in setup.sh)
+# torch
+# torchvision
+
+# Diffusers with Wan support
+git+https://github.com/linoytsaban/diffusers.git@wan22-loras
+
+# Transformers and model dependencies
+transformers<5
+accelerate
+safetensors
+sentencepiece
+peft
+
+# Image/Video processing
+opencv-python
+imageio
+imageio-ffmpeg
+Pillow
+numpy
+
+# UI and utilities
+gradio
+huggingface_hub
+ftfy
+tqdm
+typing-extensions
+
+# MMAudio
+git+https://github.com/hkchengrex/MMAudio@d1d78adc63f59329127e73fa003c29cab6714107#egg=mmaudio
+open_clip_torch
+einops
+av
+librosa
+omegaconf
+scipy
+soundfile
+PyYAML
